@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "/home/yang/code/my-ragflow/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "/home/yang/code/my-ragflow"
+  ]
+}

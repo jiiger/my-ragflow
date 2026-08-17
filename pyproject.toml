@@ -155,7 +155,6 @@ dependencies = [
     "asana>=5.2.2",
     "python-gitlab>=7.0.0",
     "quart-schema==0.23.0",
-    "peewee>=4.3.0",
 ]
 
 [dependency-groups]
