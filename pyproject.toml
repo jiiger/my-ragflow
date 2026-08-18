@@ -196,7 +196,7 @@ exclude = [".venv", "rag/svr/discord_svr.py"]
 
 [tool.ruff.lint]
 extend-select = ["ASYNC", "ASYNC1"]
-ignore = ["E402"]
+ignore = ["E402", "BLE001", "TRY004", "PERF102", "LOG015"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

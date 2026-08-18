@@ -24,7 +24,7 @@ class CustomEnum(Enum):
         try:
             cls(value)
             return True
-        except BaseException:  # noqa: BLE001 —— 原版写法:valid() 需拦截任何非法值,保持与 v0.24 一致
+        except BaseException:  # 原版写法:valid() 需拦截任何非法值,保持与 v0.24 一致
             return False
 
     @classmethod
