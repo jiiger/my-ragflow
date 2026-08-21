@@ -21,3 +21,8 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# tiktoken BPE 词表缓存(存项目根目录, 见 common/token_utils.py)
+cl100k_base.tiktoken
+# 形如哈希的临时文件(tiktoken 缓存文件名, 如 9b5ad71b2ce5302211f9c61530b329a4922fc6a4)
+*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
