@@ -15,6 +15,7 @@
   涉及存储的方法要等存储层接入后才能真跑
 方法签名与官方完全一致, 可随时 diff。
 """
+
 import asyncio
 import json
 import logging
@@ -26,15 +27,15 @@ from datetime import datetime
 from io import BytesIO
 
 import xxhash
-from peewee import fn, Case, JOIN
+from peewee import JOIN, Case, fn
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
-from api.db import CanvasCategory, FileType, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, UserTenantRole
+from api.db import PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, CanvasCategory, FileType, UserTenantRole
 from api.db.db_models import DB, Document, File, File2Document, Knowledgebase, Task, Tenant, User, UserCanvas, UserTenant
 from api.db.services.common_service import CommonService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
-from common.constants import LLMType, ParserType, SVR_CONSUMER_GROUP_NAME, SVR_QUEUE_NAME, StatusEnum, TaskStatus
+from common.constants import SVR_CONSUMER_GROUP_NAME, SVR_QUEUE_NAME, LLMType, ParserType, StatusEnum, TaskStatus
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
 
@@ -83,28 +84,25 @@ class DocumentService(CommonService):
 
     @classmethod
     @DB.connection_context()
-    def get_list(cls, kb_id, page_number, items_per_page,
-                 orderby, desc, keywords, id, name, suffix=None, run=None, doc_ids=None):
+    def get_list(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, id, name, suffix=None, run=None, doc_ids=None):
         """文档分页列表: Document 联 File2Document/File(取原始文件) 与 UserCanvas(取画布标题)。
 
         meta_fields 来自 DocMetadataService(ES/Infinity 里的元数据), 该模块未实现, 延迟导入。
         """
         fields = cls.get_cls_model_fields()
-        docs = cls.model.select(*[*fields, UserCanvas.title]).join(File2Document, on=(File2Document.document_id == cls.model.id))\
-            .join(File, on=(File.id == File2Document.file_id))\
-            .join(UserCanvas, on=((cls.model.pipeline_id == UserCanvas.id) & (UserCanvas.canvas_category == CanvasCategory.DataFlow.value)), join_type=JOIN.LEFT_OUTER)\
+        docs = (
+            cls.model.select(*[*fields, UserCanvas.title])
+            .join(File2Document, on=(File2Document.document_id == cls.model.id))
+            .join(File, on=(File.id == File2Document.file_id))
+            .join(UserCanvas, on=((cls.model.pipeline_id == UserCanvas.id) & (UserCanvas.canvas_category == CanvasCategory.DataFlow.value)), join_type=JOIN.LEFT_OUTER)
             .where(cls.model.kb_id == kb_id)
+        )
         if id:
-            docs = docs.where(
-                cls.model.id == id)
+            docs = docs.where(cls.model.id == id)
         if name:
-            docs = docs.where(
-                cls.model.name == name
-            )
+            docs = docs.where(cls.model.name == name)
         if keywords:
-            docs = docs.where(
-                fn.LOWER(cls.model.name).contains(keywords.lower())
-            )
+            docs = docs.where(fn.LOWER(cls.model.name).contains(keywords.lower()))
         if doc_ids:
             docs = docs.where(cls.model.id.in_(doc_ids))
         if suffix:
@@ -121,6 +119,7 @@ class DocumentService(CommonService):
 
         docs_list = list(docs.dicts())
         from api.db.services.doc_metadata_service import DocMetadataService
+
         metadata_map = DocMetadataService.get_metadata_for_documents(None, kb_id)
         for doc in docs_list:
             doc["meta_fields"] = metadata_map.get(doc["id"], {})
@@ -131,6 +130,7 @@ class DocumentService(CommonService):
     def check_doc_health(cls, tenant_id: str, filename):
         """上传前健康检查: 免费用户文件数上限(环境变量可配)+ 文件名长度上限。"""
         import os
+
         MAX_FILE_NUM_PER_USER = int(os.environ.get("MAX_FILE_NUM_PER_USER", 0))
         if 0 < MAX_FILE_NUM_PER_USER <= DocumentService.get_doc_count(tenant_id):
             raise RuntimeError("Exceed the maximum file number of a free user!")
@@ -176,6 +176,7 @@ class DocumentService(CommonService):
             docs = docs.where(cls.model.suffix.in_(suffix))
 
         from api.db.services.doc_metadata_service import DocMetadataService
+
         metadata_map = DocMetadataService.get_metadata_for_documents(None, kb_id)
         doc_ids_with_metadata = set(metadata_map.keys())
         if return_empty_metadata and doc_ids_with_metadata:
@@ -213,9 +214,11 @@ class DocumentService(CommonService):
         """
         fields = cls.get_cls_model_fields()
         if keywords:
-            query = cls.model.select(*fields).join(File2Document, on=(File2Document.document_id == cls.model.id)).join(File, on=(File.id == File2Document.file_id)).where(
-                (cls.model.kb_id == kb_id),
-                (fn.LOWER(cls.model.name).contains(keywords.lower()))
+            query = (
+                cls.model.select(*fields)
+                .join(File2Document, on=(File2Document.document_id == cls.model.id))
+                .join(File, on=(File.id == File2Document.file_id))
+                .where((cls.model.kb_id == kb_id), (fn.LOWER(cls.model.name).contains(keywords.lower())))
             )
         else:
             query = cls.model.select(*fields).join(File2Document, on=(File2Document.document_id == cls.model.id)).join(File, on=(File.id == File2Document.file_id)).where(cls.model.kb_id == kb_id)
@@ -240,6 +243,7 @@ class DocumentService(CommonService):
         if doc_ids:
             try:
                 from api.db.services.doc_metadata_service import DocMetadataService
+
                 metadata = DocMetadataService.get_metadata_for_documents(doc_ids, kb_id)
             except Exception as e:
                 logging.warning(f"Failed to fetch metadata from ES/Infinity: {e}")
@@ -279,10 +283,7 @@ class DocumentService(CommonService):
     def count_by_kb_id(cls, kb_id, keywords, run_status, types):
         """按条件统计 kb 下文档数。"""
         if keywords:
-            docs = cls.model.select().where(
-                (cls.model.kb_id == kb_id),
-                (fn.LOWER(cls.model.name).contains(keywords.lower()))
-            )
+            docs = cls.model.select().where((cls.model.kb_id == kb_id), (fn.LOWER(cls.model.name).contains(keywords.lower())))
         else:
             docs = cls.model.select().where(cls.model.kb_id == kb_id)
 
@@ -297,9 +298,7 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def get_total_size_by_kb_id(cls, kb_id, keywords="", run_status=[], types=[]):
         """kb 下文档总大小(SUM(size), 无记录返回 0)。"""
-        query = cls.model.select(fn.COALESCE(fn.SUM(cls.model.size), 0)).where(
-            cls.model.kb_id == kb_id
-        )
+        query = cls.model.select(fn.COALESCE(fn.SUM(cls.model.size), 0)).where(cls.model.kb_id == kb_id)
 
         if keywords:
             query = query.where(fn.LOWER(cls.model.name).contains(keywords.lower()))
@@ -332,12 +331,8 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def get_all_docs_by_creator_id(cls, creator_id):
         """某用户上传的全部文档(联 kb 带出 tenant_id, "我的文件"场景)。"""
-        fields = [
-            cls.model.id, cls.model.kb_id, cls.model.token_num, cls.model.chunk_num, Knowledgebase.tenant_id
-        ]
-        docs = cls.model.select(*fields).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(
-            cls.model.created_by == creator_id
-        )
+        fields = [cls.model.id, cls.model.kb_id, cls.model.token_num, cls.model.chunk_num, Knowledgebase.tenant_id]
+        docs = cls.model.select(*fields).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(cls.model.created_by == creator_id)
         docs.order_by(cls.model.create_time.asc())
         offset, limit = 0, 100
         res = []
@@ -370,6 +365,7 @@ class DocumentService(CommonService):
         docStore/STORAGE_IMPL, 均延迟导入或标注。
         """
         from api.db.services.task_service import TaskService, cancel_all_task_of
+
         cls.clear_chunk_num(doc.id)
 
         # 先在 Redis 里取消该文档所有运行中任务
@@ -402,6 +398,7 @@ class DocumentService(CommonService):
         # 删除检索索引里的切块(关键, 错误要打 error)
         try:
             from rag.nlp import search
+
             settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), doc.kb_id)
         except Exception as e:
             logging.error(f"Failed to delete chunks from doc store for document {doc.id}: {e}")
@@ -409,6 +406,7 @@ class DocumentService(CommonService):
         # 删除文档元数据(非关键)
         try:
             from api.db.services.doc_metadata_service import DocMetadataService
+
             DocMetadataService.delete_document_metadata(doc.id)
         except Exception as e:
             logging.warning(f"Failed to delete metadata for document {doc.id}: {e}")
@@ -417,18 +415,24 @@ class DocumentService(CommonService):
         try:
             from common.doc_store.doc_store_base import OrderByExpr
             from rag.nlp import search
+
             graph_source = settings.docStoreConn.get_fields(
-                settings.docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id), [doc.kb_id]), ["source_id"]
+                settings.docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id), [doc.kb_id]),
+                ["source_id"],
             )
             if len(graph_source) > 0 and doc.id in list(graph_source.values())[0]["source_id"]:
-                settings.docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
-                                             {"remove": {"source_id": doc.id}},
-                                             search.index_name(tenant_id), doc.kb_id)
-                settings.docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]},
-                                             {"removed_kwd": "Y"},
-                                             search.index_name(tenant_id), doc.kb_id)
-                settings.docStoreConn.delete({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
-                                             search.index_name(tenant_id), doc.kb_id)
+                settings.docStoreConn.update(
+                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
+                    {"remove": {"source_id": doc.id}},
+                    search.index_name(tenant_id),
+                    doc.kb_id,
+                )
+                settings.docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, {"removed_kwd": "Y"}, search.index_name(tenant_id), doc.kb_id)
+                settings.docStoreConn.delete(
+                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+                    search.index_name(tenant_id),
+                    doc.kb_id,
+                )
         except Exception as e:
             logging.warning(f"Failed to cleanup knowledge graph for document {doc.id}: {e}")
 
@@ -440,12 +444,11 @@ class DocumentService(CommonService):
         """清掉该文档切块关联的图片(文档里的插图存对象存储, 按页扫 docStore 的 img_id)。"""
         from common.doc_store.doc_store_base import OrderByExpr
         from rag.nlp import search
+
         page = 0
         page_size = 1000
         while True:
-            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(),
-                                                  page * page_size, page_size, search.index_name(tenant_id),
-                                                  [doc.kb_id])
+            chunks = settings.docStoreConn.search(["img_id"], [], {"doc_id": doc.id}, [], OrderByExpr(), page * page_size, page_size, search.index_name(tenant_id), [doc.kb_id])
             chunk_ids = settings.docStoreConn.get_doc_ids(chunks)
             if not chunk_ids:
                 break
@@ -471,74 +474,64 @@ class DocumentService(CommonService):
             Tenant.embd_id,
             Tenant.img2txt_id,
             Tenant.asr_id,
-            cls.model.update_time]
-        docs = cls.model.select(*fields) \
-            .join(Knowledgebase, on=(cls.model.kb_id == Knowledgebase.id)) \
-            .join(Tenant, on=(Knowledgebase.tenant_id == Tenant.id)) \
+            cls.model.update_time,
+        ]
+        docs = (
+            cls.model.select(*fields)
+            .join(Knowledgebase, on=(cls.model.kb_id == Knowledgebase.id))
+            .join(Tenant, on=(Knowledgebase.tenant_id == Tenant.id))
             .where(
-            cls.model.status == StatusEnum.VALID.value,
-            ~(cls.model.type == FileType.VIRTUAL.value),
-            cls.model.progress == 0,
-            cls.model.update_time >= current_timestamp() - 1000 * 600,
-            cls.model.run == TaskStatus.RUNNING.value) \
+                cls.model.status == StatusEnum.VALID.value,
+                ~(cls.model.type == FileType.VIRTUAL.value),
+                cls.model.progress == 0,
+                cls.model.update_time >= current_timestamp() - 1000 * 600,
+                cls.model.run == TaskStatus.RUNNING.value,
+            )
             .order_by(cls.model.update_time.asc())
+        )
         return list(docs.dicts())
 
     @classmethod
     @DB.connection_context()
     def get_unfinished_docs(cls):
         """解析未完成的文档(进度 0~1, 或还有未完成的任务——含 GraphRAG/RAPTOR/Mindmap)。"""
-        fields = [cls.model.id, cls.model.process_begin_at, cls.model.parser_config, cls.model.progress_msg,
-                  cls.model.run, cls.model.parser_id]
-        unfinished_task_query = Task.select(Task.doc_id).where(
-            (Task.progress >= 0) & (Task.progress < 1)
-        )
+        fields = [cls.model.id, cls.model.process_begin_at, cls.model.parser_config, cls.model.progress_msg, cls.model.run, cls.model.parser_id]
+        unfinished_task_query = Task.select(Task.doc_id).where((Task.progress >= 0) & (Task.progress < 1))
 
-        docs = cls.model.select(*fields) \
-            .where(
+        docs = cls.model.select(*fields).where(
             cls.model.status == StatusEnum.VALID.value,
             ~(cls.model.type == FileType.VIRTUAL.value),
             ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value)),
-            (((cls.model.progress < 1) & (cls.model.progress > 0)) |
-             (cls.model.id.in_(unfinished_task_query))))
+            (((cls.model.progress < 1) & (cls.model.progress > 0)) | (cls.model.id.in_(unfinished_task_query))),
+        )
         return list(docs.dicts())
 
     @classmethod
     @DB.connection_context()
     def increment_chunk_num(cls, doc_id, kb_id, token_num, chunk_num, duration):
         """解析完成后累加文档/kb 的切块数与 token 数(失败静默: 疑似文档已删)。"""
-        num = cls.model.update(token_num=cls.model.token_num + token_num,
-                               chunk_num=cls.model.chunk_num + chunk_num,
-                               process_duration=cls.model.process_duration + duration).where(
-            cls.model.id == doc_id).execute()
+        num = (
+            cls.model.update(token_num=cls.model.token_num + token_num, chunk_num=cls.model.chunk_num + chunk_num, process_duration=cls.model.process_duration + duration)
+            .where(cls.model.id == doc_id)
+            .execute()
+        )
         if num == 0:
             logging.warning("Document not found which is supposed to be there")
-        num = Knowledgebase.update(
-            token_num=Knowledgebase.token_num +
-                      token_num,
-            chunk_num=Knowledgebase.chunk_num +
-                      chunk_num).where(
-            Knowledgebase.id == kb_id).execute()
+        num = Knowledgebase.update(token_num=Knowledgebase.token_num + token_num, chunk_num=Knowledgebase.chunk_num + chunk_num).where(Knowledgebase.id == kb_id).execute()
         return num
 
     @classmethod
     @DB.connection_context()
     def decrement_chunk_num(cls, doc_id, kb_id, token_num, chunk_num, duration):
         """重新解析前回退计数(与 increment 对称, 文档不存在则报错)。"""
-        num = cls.model.update(token_num=cls.model.token_num - token_num,
-                               chunk_num=cls.model.chunk_num - chunk_num,
-                               process_duration=cls.model.process_duration + duration).where(
-            cls.model.id == doc_id).execute()
+        num = (
+            cls.model.update(token_num=cls.model.token_num - token_num, chunk_num=cls.model.chunk_num - chunk_num, process_duration=cls.model.process_duration + duration)
+            .where(cls.model.id == doc_id)
+            .execute()
+        )
         if num == 0:
-            raise LookupError(
-                "Document not found which is supposed to be there")
-        num = Knowledgebase.update(
-            token_num=Knowledgebase.token_num -
-                      token_num,
-            chunk_num=Knowledgebase.chunk_num -
-                      chunk_num
-        ).where(
-            Knowledgebase.id == kb_id).execute()
+            raise LookupError("Document not found which is supposed to be there")
+        num = Knowledgebase.update(token_num=Knowledgebase.token_num - token_num, chunk_num=Knowledgebase.chunk_num - chunk_num).where(Knowledgebase.id == kb_id).execute()
         return num
 
     @classmethod
@@ -548,14 +541,11 @@ class DocumentService(CommonService):
         doc = cls.model.get_by_id(doc_id)
         assert doc, "Can't fine document in database."
 
-        num = Knowledgebase.update(
-            token_num=Knowledgebase.token_num -
-                      doc.token_num,
-            chunk_num=Knowledgebase.chunk_num -
-                      doc.chunk_num,
-            doc_num=Knowledgebase.doc_num - 1
-        ).where(
-            Knowledgebase.id == doc.kb_id).execute()
+        num = (
+            Knowledgebase.update(token_num=Knowledgebase.token_num - doc.token_num, chunk_num=Knowledgebase.chunk_num - doc.chunk_num, doc_num=Knowledgebase.doc_num - 1)
+            .where(Knowledgebase.id == doc.kb_id)
+            .execute()
+        )
         return num
 
     @classmethod
@@ -579,11 +569,7 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def get_tenant_id(cls, doc_id):
         """文档所属租户(联 kb 拿 tenant_id, kb 失效则返回 None)。"""
-        docs = cls.model.select(
-            Knowledgebase.tenant_id).join(
-            Knowledgebase, on=(
-                    Knowledgebase.id == cls.model.kb_id)).where(
-            cls.model.id == doc_id, Knowledgebase.status == StatusEnum.VALID.value)
+        docs = cls.model.select(Knowledgebase.tenant_id).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(cls.model.id == doc_id, Knowledgebase.status == StatusEnum.VALID.value)
         docs = docs.dicts()
         if not docs:
             return None
@@ -603,11 +589,7 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def get_tenant_id_by_name(cls, name):
         """按文档名查租户(旧接口); 同名文档可能多条, 取第一条。"""
-        docs = cls.model.select(
-            Knowledgebase.tenant_id).join(
-            Knowledgebase, on=(
-                    Knowledgebase.id == cls.model.kb_id)).where(
-            cls.model.name == name, Knowledgebase.status == StatusEnum.VALID.value)
+        docs = cls.model.select(Knowledgebase.tenant_id).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(cls.model.name == name, Knowledgebase.status == StatusEnum.VALID.value)
         docs = docs.dicts()
         if not docs:
             return None
@@ -617,12 +599,13 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def accessible(cls, doc_id, user_id):
         """用户能否访问该文档: 文档 → kb → tenant → user_tenant 关系链。"""
-        docs = cls.model.select(
-            cls.model.id).join(
-            Knowledgebase, on=(
-                    Knowledgebase.id == cls.model.kb_id)
-        ).join(UserTenant, on=(UserTenant.tenant_id == Knowledgebase.tenant_id)
-               ).where(cls.model.id == doc_id, UserTenant.user_id == user_id).paginate(0, 1)
+        docs = (
+            cls.model.select(cls.model.id)
+            .join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id))
+            .join(UserTenant, on=(UserTenant.tenant_id == Knowledgebase.tenant_id))
+            .where(cls.model.id == doc_id, UserTenant.user_id == user_id)
+            .paginate(0, 1)
+        )
         docs = docs.dicts()
         if not docs:
             return False
@@ -636,18 +619,13 @@ class DocumentService(CommonService):
         注意和 accessible 的区别: 这里 join 的是 Knowledgebase.created_by(创建者)
         而不是 tenant_id, 并校验了角色。
         """
-        docs = cls.model.select(cls.model.id
-                                ).join(
-            Knowledgebase, on=(
-                    Knowledgebase.id == cls.model.kb_id)
-        ).join(
-            UserTenant, on=(
-                    (UserTenant.tenant_id == Knowledgebase.created_by) & (UserTenant.user_id == user_id))
-        ).where(
-            cls.model.id == doc_id,
-            UserTenant.status == StatusEnum.VALID.value,
-            ((UserTenant.role == UserTenantRole.NORMAL) | (UserTenant.role == UserTenantRole.OWNER))
-        ).paginate(0, 1)
+        docs = (
+            cls.model.select(cls.model.id)
+            .join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id))
+            .join(UserTenant, on=((UserTenant.tenant_id == Knowledgebase.created_by) & (UserTenant.user_id == user_id)))
+            .where(cls.model.id == doc_id, UserTenant.status == StatusEnum.VALID.value, ((UserTenant.role == UserTenantRole.NORMAL) | (UserTenant.role == UserTenantRole.OWNER)))
+            .paginate(0, 1)
+        )
         docs = docs.dicts()
         if not docs:
             return False
@@ -657,11 +635,7 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def get_embd_id(cls, doc_id):
         """文档所在 kb 的 embedding 模型 id(向量化前查模型)。"""
-        docs = cls.model.select(
-            Knowledgebase.embd_id).join(
-            Knowledgebase, on=(
-                    Knowledgebase.id == cls.model.kb_id)).where(
-            cls.model.id == doc_id, Knowledgebase.status == StatusEnum.VALID.value)
+        docs = cls.model.select(Knowledgebase.embd_id).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(cls.model.id == doc_id, Knowledgebase.status == StatusEnum.VALID.value)
         docs = docs.dicts()
         if not docs:
             return None
@@ -701,8 +675,7 @@ class DocumentService(CommonService):
     def get_doc_id_by_doc_name(cls, doc_name):
         """按文档名取单个 id(重名时返回第一条)。"""
         fields = [cls.model.id]
-        doc_id = cls.model.select(*fields) \
-            .where(cls.model.name == doc_name)
+        doc_id = cls.model.select(*fields).where(cls.model.name == doc_name)
         doc_id = doc_id.dicts()
         if not doc_id:
             return None
@@ -723,8 +696,7 @@ class DocumentService(CommonService):
     def get_thumbnails(cls, docids):
         """批量取缩略图(文档列表卡片用)。"""
         fields = [cls.model.id, cls.model.kb_id, cls.model.thumbnail]
-        return list(cls.model.select(
-            *fields).where(cls.model.id.in_(docids)).dicts())
+        return list(cls.model.select(*fields).where(cls.model.id.in_(docids)).dicts())
 
     @classmethod
     @DB.connection_context()
@@ -759,9 +731,7 @@ class DocumentService(CommonService):
     @DB.connection_context()
     def get_doc_count(cls, tenant_id):
         """某租户下的文档总数(免费用户配额检查用)。"""
-        docs = cls.model.select(cls.model.id).join(Knowledgebase,
-                                                   on=(Knowledgebase.id == cls.model.kb_id)).where(
-            Knowledgebase.tenant_id == tenant_id)
+        docs = cls.model.select(cls.model.id).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(Knowledgebase.tenant_id == tenant_id)
         return len(docs)
 
     @classmethod
@@ -777,7 +747,7 @@ class DocumentService(CommonService):
             "process_begin_at": get_format_time(),
         }
         if not keep_progress:
-            info["progress"] = random.random() * 1 / 100.
+            info["progress"] = random.random() * 1 / 100.0
             info["run"] = TaskStatus.RUNNING.value
 
         cls.update_by_id(doc_id, info)
@@ -834,7 +804,7 @@ class DocumentService(CommonService):
                         finished = False
                     if t.progress == -1:
                         bad += 1
-                    prg += t.progress if t.progress >= 0 else 0
+                    prg += max(t.progress, 0)
                     if t.progress_msg.strip():
                         msg.append(t.progress_msg)
                     priority = max(priority, t.priority)
@@ -854,9 +824,7 @@ class DocumentService(CommonService):
                     begin_at = datetime.now()
                     cls.update_by_id(d["id"], {"process_begin_at": begin_at})
 
-                info = {
-                    "process_duration": max(datetime.timestamp(datetime.now()) - begin_at.timestamp(), 0),
-                    "run": status}
+                info = {"process_duration": max(datetime.timestamp(datetime.now()) - begin_at.timestamp(), 0), "run": status}
                 if prg != 0 and not freeze_progress:
                     info["progress"] = prg
                 if msg:
@@ -867,14 +835,7 @@ class DocumentService(CommonService):
                     info["progress_msg"] = "%d tasks are ahead in the queue..." % get_queue_length(priority)
                 info["update_time"] = current_timestamp()
                 info["update_date"] = get_format_time()
-                (
-                    cls.model.update(info)
-                    .where(
-                        (cls.model.id == d["id"])
-                        & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value))
-                    )
-                    .execute()
-                )
+                (cls.model.update(info).where((cls.model.id == d["id"]) & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value))).execute())
             except Exception as e:
                 if str(e).find("'0'") < 0:
                     logging.exception("fetch task exception")
@@ -913,19 +874,8 @@ class DocumentService(CommonService):
 
         进度语义: 1=完成, -1=失败, 0~1=处理中, run="2"=取消。
         """
-        cancelled = (
-            cls.model.select(fn.COUNT(1))
-            .where((cls.model.kb_id == kb_id) & (cls.model.run == TaskStatus.CANCEL))
-            .scalar()
-        )
-        downloaded = (
-            cls.model.select(fn.COUNT(1))
-            .where(
-                cls.model.kb_id == kb_id,
-                cls.model.source_type != "local"
-            )
-            .scalar()
-        )
+        cancelled = cls.model.select(fn.COUNT(1)).where((cls.model.kb_id == kb_id) & (cls.model.run == TaskStatus.CANCEL)).scalar()
+        downloaded = cls.model.select(fn.COUNT(1)).where(cls.model.kb_id == kb_id, cls.model.source_type != "local").scalar()
 
         row = (
             cls.model.select(
@@ -944,21 +894,12 @@ class DocumentService(CommonService):
                     0,
                 ).alias("processing"),
             )
-            .where(
-                (cls.model.kb_id == kb_id)
-                & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL))
-            )
+            .where((cls.model.kb_id == kb_id) & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL)))
             .dicts()
             .get()
         )
 
-        return {
-            "processing": int(row["processing"]),
-            "finished": int(row["finished"]),
-            "failed": int(row["failed"]),
-            "cancelled": int(cancelled),
-            "downloaded": int(downloaded)
-        }
+        return {"processing": int(row["processing"]), "finished": int(row["finished"]), "failed": int(row["failed"]), "cancelled": int(cancelled), "downloaded": int(downloaded)}
 
     @classmethod
     def run(cls, tenant_id: str, doc: dict, kb_table_num_map: dict):
@@ -967,8 +908,8 @@ class DocumentService(CommonService):
         table 模板特殊处理: 该 kb 若还没有 DONE 的文档且没有 field_map,
         先清掉旧 field_map(避免表格模板残留配置)。
         """
-        from api.db.services.task_service import queue_dataflow, queue_tasks
         from api.db.services.file2document_service import File2DocumentService
+        from api.db.services.task_service import queue_dataflow, queue_tasks
 
         doc["tenant_id"] = tenant_id
         doc_parser = doc.get("parser_id", ParserType.NAIVE)
@@ -1019,12 +960,14 @@ def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", d
     hasher.update(ty.encode("utf-8"))
     task["digest"] = hasher.hexdigest()
     from api.db.db_utils import bulk_insert_into_db
+
     bulk_insert_into_db(Task, [task], True)
 
     task["doc_id"] = fake_doc_id
     task["doc_ids"] = doc_ids
     DocumentService.begin2parse(sample_doc_id["id"], keep_progress=True)
     from rag.utils.redis_conn import REDIS_CONN
+
     assert REDIS_CONN.queue_product(_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
@@ -1032,6 +975,7 @@ def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", d
 def get_queue_length(priority):
     """某优先级任务队列的积压量(Redis stream 的 lag), 展示"前面还有几个任务"。"""
     from rag.utils.redis_conn import REDIS_CONN
+
     group_info = REDIS_CONN.queue_info(_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
     if not group_info:
         return 0
@@ -1048,9 +992,10 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     from api.db.services.conversation_service import ConversationService
     from api.db.services.dialog_service import DialogService
     from api.db.services.file_service import FileService
+    from rag.app import audio, email, naive, picture, presentation
+
     from api.db.services.llm_service import LLMBundle
     from api.db.services.user_service import TenantService
-    from rag.app import audio, email, naive, picture, presentation
 
     e, conv = ConversationService.get_by_id(conversation_id)
     if not e:
@@ -1059,8 +1004,7 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
 
     e, dia = DialogService.get_by_id(conv.dialog_id)
     if not dia.kb_ids:
-        raise LookupError("No dataset associated with this conversation. "
-                          "Please add a dataset before uploading documents")
+        raise LookupError("No dataset associated with this conversation. Please add a dataset before uploading documents")
     kb_id = dia.kb_ids[0]
     e, kb = KnowledgebaseService.get_by_id(kb_id)
     if not e:
@@ -1074,12 +1018,7 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     def dummy(prog=None, msg=""):
         pass
 
-    FACTORY = {
-        ParserType.PRESENTATION.value: presentation,
-        ParserType.PICTURE.value: picture,
-        ParserType.AUDIO.value: audio,
-        ParserType.EMAIL.value: email
-    }
+    FACTORY = {ParserType.PRESENTATION.value: presentation, ParserType.PICTURE.value: picture, ParserType.AUDIO.value: audio, ParserType.EMAIL.value: email}
     parser_config = {"chunk_token_num": 4096, "delimiter": "\n!?;。；！？", "layout_recognize": "Plain Text", "table_context_size": 0, "image_context_size": 0}
     exe = ThreadPoolExecutor(max_workers=12)
     threads = []
@@ -1087,22 +1026,12 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     for d, blob in files:
         doc_nm[d["id"]] = d["name"]
     for d, blob in files:
-        kwargs = {
-            "callback": dummy,
-            "parser_config": parser_config,
-            "from_page": 0,
-            "to_page": 100000,
-            "tenant_id": kb.tenant_id,
-            "lang": kb.language
-        }
+        kwargs = {"callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": 100000, "tenant_id": kb.tenant_id, "lang": kb.language}
         threads.append(exe.submit(FACTORY.get(d["parser_id"], naive).chunk, d["name"], blob, **kwargs))
 
     for (docinfo, _), th in zip(files, threads):
         docs = []
-        doc = {
-            "doc_id": docinfo["id"],
-            "kb_id": [kb.id]
-        }
+        doc = {"doc_id": docinfo["id"], "kb_id": [kb.id]}
         for ck in th.result():
             d = deepcopy(doc)
             d.update(ck)
@@ -1134,13 +1063,14 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
         nonlocal embd_mdl, chunk_counts, token_counts
         vectors = []
         for i in range(0, len(cnts), batch_size):
-            vts, c = embd_mdl.encode(cnts[i: i + batch_size])
+            vts, c = embd_mdl.encode(cnts[i : i + batch_size])
             vectors.extend(vts.tolist())
-            chunk_counts[doc_id] += len(cnts[i:i + batch_size])
+            chunk_counts[doc_id] += len(cnts[i : i + batch_size])
             token_counts[doc_id] += c
         return vectors
 
-    from rag.nlp import search, rag_tokenizer
+    from rag.nlp import rag_tokenizer, search
+
     idxnm = search.index_name(kb.tenant_id)
     try_create_idx = True
 
@@ -1151,22 +1081,25 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
 
         if parser_ids[doc_id] != ParserType.PICTURE.value:
             from rag.graphrag.general.mind_map_extractor import MindMapExtractor
+
             mindmap = MindMapExtractor(llm_bdl)
             try:
                 mind_map = asyncio.run(mindmap([c["content_with_weight"] for c in docs if c["doc_id"] == doc_id]))
                 mind_map = json.dumps(mind_map.output, ensure_ascii=False, indent=2)
                 if len(mind_map) < 32:
                     raise Exception("Few content: " + mind_map)
-                cks.append({
-                    "id": get_uuid(),
-                    "doc_id": doc_id,
-                    "kb_id": [kb.id],
-                    "docnm_kwd": doc_nm[doc_id],
-                    "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", doc_nm[doc_id])),
-                    "content_ltks": rag_tokenizer.tokenize("summary summarize 总结 概况 file 文件 概括"),
-                    "content_with_weight": mind_map,
-                    "knowledge_graph_kwd": "mind_map"
-                })
+                cks.append(
+                    {
+                        "id": get_uuid(),
+                        "doc_id": doc_id,
+                        "kb_id": [kb.id],
+                        "docnm_kwd": doc_nm[doc_id],
+                        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", doc_nm[doc_id])),
+                        "content_ltks": rag_tokenizer.tokenize("summary summarize 总结 概况 file 文件 概括"),
+                        "content_with_weight": mind_map,
+                        "knowledge_graph_kwd": "mind_map",
+                    }
+                )
             except Exception:
                 logging.exception("Mind map generation error")
 
@@ -1180,9 +1113,8 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
                 if not settings.docStoreConn.index_exist(idxnm, kb_id):
                     settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]), kb.parser_id)
                 try_create_idx = False
-            settings.docStoreConn.insert(cks[b:b + es_bulk_size], idxnm, kb_id)
+            settings.docStoreConn.insert(cks[b : b + es_bulk_size], idxnm, kb_id)
 
-        DocumentService.increment_chunk_num(
-            doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
+        DocumentService.increment_chunk_num(doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
 
     return [d["id"] for d, _ in files]
