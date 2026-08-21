@@ -8,3 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Test & lint caches and coverage
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors (machine-specific settings, e.g. absolute venv paths)
+.vscode/
+.idea/
+
+# OS
+.DS_Store
