@@ -1,0 +1,53 @@
+import base64
+import os
+import sys
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
+from common.file_utils import get_project_base_directory
+
+
+def crypt(line):
+    """
+    decrypt(crypt(input_string)) == base64(input_string), which frontend and ragflow_cli use.
+    """
+    file_path = os.path.join(get_project_base_directory(), "conf", "public.pem")
+    rsa_key = RSA.importKey(open(file_path).read(), "Welcome")
+    cipher = Cipher_pkcs1_v1_5.new(rsa_key)
+    password_base64 = base64.b64encode(line.encode('utf-8')).decode("utf-8")
+    encrypted_password = cipher.encrypt(password_base64.encode())
+    return base64.b64encode(encrypted_password).decode('utf-8')
+
+
+def decrypt(line):
+    """解密: 前端把密码做 base64 → RSA 公钥加密, 后端用私钥解回 base64 明文密码。
+
+    密钥文件 conf/private.pem(官方默认开发密钥, 已随仓库跟踪)。
+    """
+    file_path = os.path.join(get_project_base_directory(), "conf", "private.pem")
+    rsa_key = RSA.importKey(open(file_path).read(), "Welcome")
+    cipher = Cipher_pkcs1_v1_5.new(rsa_key)
+    return cipher.decrypt(base64.b64decode(line), "Fail to decrypt password!").decode('utf-8')
+
+
+def decrypt2(crypt_text):
+    """备用解密(兼容 127 字节短密文补前导 00 的旧格式), 官方保留, 学习版基本用不到。"""
+    from base64 import b64decode, b16decode
+    from Crypto.Cipher import PKCS1_v1_5 as Cipher_PKCS1_v1_5
+    from Crypto.PublicKey import RSA
+    decode_data = b64decode(crypt_text)
+    if len(decode_data) == 127:
+        hex_fixed = '00' + decode_data.hex()
+        decode_data = b16decode(hex_fixed.upper())
+
+    file_path = os.path.join(get_project_base_directory(), "conf", "private.pem")
+    pem = open(file_path).read()
+    rsa_key = RSA.importKey(pem, "Welcome")
+    cipher = Cipher_PKCS1_v1_5.new(rsa_key)
+    decrypt_text = cipher.decrypt(decode_data, None)
+    return (b64decode(decrypt_text)).decode()
+
+
+if __name__ == "__main__":
+    passwd = crypt(sys.argv[1])
+    print(passwd)
+    print(decrypt(passwd))
