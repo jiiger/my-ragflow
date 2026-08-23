@@ -134,3 +134,33 @@ def get_parser_config(chunk_method, parser_config):
     merged_config = deep_merge(merged_config, parser_config)
 
     return merged_config
+
+
+def server_error_response(e):
+    """全局异常兜底处理器(挂 app.errorhandler(Exception))。
+
+    Quart 在 except 块之外调用该 handler, 必须手动传 exc_info。
+    401/unauthorized 归为 UNAUTHORIZED, ES 索引缺失给提示, 其余 EXCEPTION_ERROR。
+    对齐官方 api_utils.server_error_response。
+    """
+    # Quart invokes this handler outside the original except block, so we must pass exc_info manually.
+    logging.error("Unhandled exception during request", exc_info=(type(e), e, e.__traceback__))
+    try:
+        msg = repr(e).lower()
+        if getattr(e, "code", None) == 401 or ("unauthorized" in msg) or ("401" in msg):
+            resp = get_json_result(code=RetCode.UNAUTHORIZED, message="Unauthorized")
+            resp.status_code = RetCode.UNAUTHORIZED
+            return resp
+    except Exception as ex:  # noqa: F841 # 官方原样: ex 未使用, 日志为官方打码的 *** 字面量
+        logging.warning(f"error checking authorization: ***")  # noqa: F541 # 官方原样: 无占位符 f-string
+
+    if repr(e).find("index_not_found_exception") >= 0:
+        return get_json_result(code=RetCode.EXCEPTION_ERROR, message="No chunk found, please upload file and parse it.")
+
+    return get_json_result(code=RetCode.EXCEPTION_ERROR, message=repr(e))
+
+
+def get_json_result(code: RetCode = RetCode.SUCCESS, message="success", data=None):
+    """统一成功/失败响应: {code, message, data}(官方 api_utils.get_json_result 原封)。"""
+    response = {"code": code, "message": message, "data": data}
+    return _safe_jsonify(response)
