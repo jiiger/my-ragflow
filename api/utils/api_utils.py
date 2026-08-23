@@ -10,10 +10,18 @@
 等 HTTP 层(第 2 步)再按需从官方补齐其余函数。
 """
 import logging
+import inspect
 from copy import deepcopy
+from functools import wraps
 from typing import Any
 
 from quart import jsonify, has_app_context, request
+from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
+
+try:
+    from quart.exceptions import BadRequest as QuartBadRequest
+except ImportError:  # pragma: no cover - optional dependency
+    QuartBadRequest = None
 
 from common.constants import RetCode
 
@@ -201,3 +209,59 @@ async def _coerce_request_data() -> dict:
 async def get_request_json():
     """读取并解析请求体: JSON body 优先, 无 body 给 {}, 表单 fallback(官方 api_utils.get_request_json 原封)。"""
     return await _coerce_request_data()
+
+
+def validate_request(*args, **kwargs):
+    """请求参数校验装饰器(官方 api_utils.validate_request 原封)。
+
+    用法: @validate_request("nickname", "email") 检查必填参数;
+    或 @validate_request(flag=("a", "b")) 校验参数值必须落在给定集合。
+    缺参/值非法时直接返回 ARGUMENT_ERROR, 不进入业务函数。
+    """
+    def process_args(input_arguments):
+        no_arguments = []
+        error_arguments = []
+        for arg in args:
+            if arg not in input_arguments:
+                no_arguments.append(arg)
+        for k, v in kwargs.items():
+            config_value = input_arguments.get(k, None)
+            if config_value is None:
+                no_arguments.append(k)
+            elif isinstance(v, (tuple, list)):
+                if config_value not in v:
+                    error_arguments.append((k, set(v)))
+            elif config_value != v:
+                error_arguments.append((k, v))
+        if no_arguments or error_arguments:
+            error_string = ""
+            if no_arguments:
+                error_string += "required argument are missing: {}; ".format(",".join(no_arguments))
+            if error_arguments:
+                error_string += "required argument values: {}".format(",".join(["{}={}".format(a[0], a[1]) for a in error_arguments]))
+            return error_string
+        return None
+
+    def wrapper(func):
+        @wraps(func)
+        async def decorated_function(*_args, **_kwargs):
+            exception_types = (AttributeError, TypeError, WerkzeugBadRequest)
+            if QuartBadRequest is not None:
+                exception_types = exception_types + (QuartBadRequest,)
+            if args or kwargs:
+                try:
+                    input_arguments = await _coerce_request_data()
+                except exception_types:
+                    input_arguments = {}
+            else:
+                input_arguments = await _coerce_request_data()
+            errs = process_args(input_arguments)
+            if errs:
+                return get_json_result(code=RetCode.ARGUMENT_ERROR, message=errs)
+            if inspect.iscoroutinefunction(func):
+                return await func(*_args, **_kwargs)
+            return func(*_args, **_kwargs)
+
+        return decorated_function
+
+    return wrapper
