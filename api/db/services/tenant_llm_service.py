@@ -11,7 +11,7 @@ from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
 from common import settings
 from common.constants import MINERU_DEFAULT_CONFIG, MINERU_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG, PADDLEOCR_ENV_KEYS, LLMType
-from rag.llm import ChatModel, EmbeddingModel, RerankModel
+from rag.llm import ChatModel, CvModel, EmbeddingModel, RerankModel, Seq2txtModel, TTSModel, OcrModel
 
 
 class LLMFactoriesService(CommonService):
@@ -123,7 +123,7 @@ class TenantLLMService(CommonService):
     def model_instance(cls, tenant_id, llm_type, llm_name=None, lang="Chinese", **kwargs):
         model_config = TenantLLMService.get_model_config(tenant_id, llm_type, llm_name)
         kwargs.update({"provider": model_config["llm_factory"]})
-        # 学习版只保留 chat/embedding/rerank 三类; 官方此处还有 CvModel/Seq2txtModel/TTSModel/OcrModel 分支
+        # 2026-08-23 恢复全部 6 类分支(cv/seq2txt/tts/ocr 模型用户已补)
         if llm_type == LLMType.EMBEDDING.value:
             if model_config["llm_factory"] not in EmbeddingModel:
                 return None
@@ -134,10 +134,38 @@ class TenantLLMService(CommonService):
                 return None
             return RerankModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
+        elif llm_type == LLMType.IMAGE2TEXT.value:
+            if model_config["llm_factory"] not in CvModel:
+                return None
+            return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"], **kwargs)
+
         elif llm_type == LLMType.CHAT.value:
             if model_config["llm_factory"] not in ChatModel:
                 return None
             return ChatModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
+
+        elif llm_type == LLMType.SPEECH2TEXT:
+            if model_config["llm_factory"] not in Seq2txtModel:
+                return None
+            return Seq2txtModel[model_config["llm_factory"]](key=model_config["api_key"], model_name=model_config["llm_name"], lang=lang, base_url=model_config["api_base"])
+        elif llm_type == LLMType.TTS:
+            if model_config["llm_factory"] not in TTSModel:
+                return None
+            return TTSModel[model_config["llm_factory"]](
+                model_config["api_key"],
+                model_config["llm_name"],
+                base_url=model_config["api_base"],
+            )
+
+        elif llm_type == LLMType.OCR:
+            if model_config["llm_factory"] not in OcrModel:
+                return None
+            return OcrModel[model_config["llm_factory"]](
+                key=model_config["api_key"],
+                model_name=model_config["llm_name"],
+                base_url=model_config.get("api_base", ""),
+                **kwargs,
+            )
 
         return None
 
@@ -149,11 +177,15 @@ class TenantLLMService(CommonService):
             logging.error(f"Tenant not found: {tenant_id}")
             return 0
 
-        # 学习版裁剪: 官方 llm_map 还含 SPEECH2TEXT/IMAGE2TEXT/TTS/OCR 分支
+        # 2026-08-23 恢复官方全量分支(6 类模型都可计 usage)
         llm_map = {
             LLMType.EMBEDDING.value: tenant.embd_id if not llm_name else llm_name,
+            LLMType.SPEECH2TEXT.value: tenant.asr_id,
+            LLMType.IMAGE2TEXT.value: tenant.img2txt_id,
             LLMType.CHAT.value: tenant.llm_id if not llm_name else llm_name,
             LLMType.RERANK.value: tenant.rerank_id if not llm_name else llm_name,
+            LLMType.TTS.value: tenant.tts_id if not llm_name else llm_name,
+            LLMType.OCR.value: llm_name,
         }
 
         mdlnm = llm_map.get(llm_type)
