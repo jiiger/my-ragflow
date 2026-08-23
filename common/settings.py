@@ -1,6 +1,9 @@
 import os
+from datetime import date
+import secrets
 
-from common.config_utils import decrypt_database_config
+from common.config_utils import get_base_config, decrypt_database_config
+from api.constants import RAG_FLOW_SERVICE_NAME
 
 LLM = None
 LLM_FACTORY = None
@@ -85,6 +88,49 @@ PARALLEL_DEVICES: int = 0
 
 STORAGE_IMPL_TYPE = os.getenv("STORAGE_IMPL", "MINIO")
 STORAGE_IMPL = None
+
+
+def _get_or_create_secret_key():
+    """从环境变量 RAGFLOW_SECRET_KEY / service_conf 的 secret_key 读取, 否则自动生成(官方 settings 原封)。"""
+    secret_key = os.environ.get("RAGFLOW_SECRET_KEY")
+    if secret_key and len(secret_key) >= 32:
+        return secret_key
+
+    # Check if there's a configured secret key
+    configured_key = get_base_config(RAG_FLOW_SERVICE_NAME, {}).get("secret_key")
+    if configured_key and configured_key != str(date.today()) and len(configured_key) >= 32:
+        return configured_key
+
+    # Generate a new secure key and warn about it
+    import logging
+
+    new_key = secrets.token_hex(32)
+    logging.warning("SECURITY WARNING: Using auto-generated SECRET_KEY.")
+    return new_key
+
+
+def init_settings():
+    """⚠️ 学习版精简版 init_settings(SECRET_KEY 部分对齐官方, 其余裁剪)。
+
+    官方 init_settings 有 228 行(user_default_llm 各模型配置解析/llm_factories.json/
+    doc_store/minio/s3 等), 学习版 settings 为精简版, 只在 HTTP 层需要时初始化:
+    SECRET_KEY(签名 session)、oauth 配置(http_client._is_sensitive_url / user_app 第三方登录)。
+    CHAT_CFG/EMBEDDING_CFG 等模型配置在 rag/llm 侧按需读取, 不在这里解析。
+    """
+    global SECRET_KEY, DATABASE, DATABASE_TYPE
+    DATABASE_TYPE = os.getenv("DB_TYPE", "mysql")
+    DATABASE = decrypt_database_config(name=DATABASE_TYPE)
+
+    global GITHUB_OAUTH, FEISHU_OAUTH, OAUTH_CONFIG, CLIENT_AUTHENTICATION, HTTP_APP_KEY
+    authentication_conf = get_base_config("authentication", {})
+    CLIENT_AUTHENTICATION = authentication_conf.get("client", {}).get("switch", False)
+    HTTP_APP_KEY = authentication_conf.get("client", {}).get("http_app_key")
+    GITHUB_OAUTH = get_base_config("oauth", {}).get("github")
+    FEISHU_OAUTH = get_base_config("oauth", {}).get("feishu")
+    OAUTH_CONFIG = get_base_config("oauth", {})
+
+    global SECRET_KEY
+    SECRET_KEY = _get_or_create_secret_key()
 
 
 
