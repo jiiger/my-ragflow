@@ -119,8 +119,12 @@ OcrModel = globals().get("OcrModel", {})
 
 MODULE_MAPPING = {
     "chat_model": ChatModel,
+    "cv_model": CvModel,
     "embedding_model": EmbeddingModel,
     "rerank_model": RerankModel,
+    "sequence2txt_model": Seq2txtModel,
+    "tts_model": TTSModel,
+    "ocr_model": OcrModel,
 }
 
 package_name = __name__
@@ -155,4 +159,4 @@ for module_name, mapping_dict in MODULE_MAPPING.items():
                     mapping_dict[obj._FACTORY_NAME] = obj
 
 
-__all__ = ["ChatModel", "EmbeddingModel", "RerankModel"]
+__all__ = ["ChatModel", "CvModel", "EmbeddingModel", "RerankModel", "Seq2txtModel", "TTSModel", "OcrModel"]
