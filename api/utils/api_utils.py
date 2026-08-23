@@ -11,8 +11,9 @@
 """
 import logging
 from copy import deepcopy
+from typing import Any
 
-from quart import jsonify, has_app_context
+from quart import jsonify, has_app_context, request
 
 from common.constants import RetCode
 
@@ -164,3 +165,39 @@ def get_json_result(code: RetCode = RetCode.SUCCESS, message="success", data=Non
     """统一成功/失败响应: {code, message, data}(官方 api_utils.get_json_result 原封)。"""
     response = {"code": code, "message": message, "data": data}
     return _safe_jsonify(response)
+
+
+async def _coerce_request_data() -> dict:
+    """Fetch JSON body with sane defaults; fallback to form data.(官方原封)"""
+    if hasattr(request, "_cached_payload"):
+        return request._cached_payload
+    payload: Any = None
+
+    body_bytes = await request.get_data()
+    has_body = bool(body_bytes)
+    content_type = (request.content_type or "").lower()
+    is_json = content_type.startswith("application/json")
+
+    if not has_body:
+        payload = {}
+    elif is_json:
+        payload = await request.get_json(force=False, silent=False)
+        if isinstance(payload, dict):
+            payload = payload or {}
+        elif isinstance(payload, str):
+            raise AttributeError("'str' object has no attribute 'get'")
+        else:
+            raise TypeError("JSON payload must be an object.")
+    else:
+        form = await request.form
+        payload = form.to_dict() if form else None
+        if payload is None:
+            raise TypeError("Request body is not a valid form payload.")
+
+    request._cached_payload = payload
+    return payload
+
+
+async def get_request_json():
+    """读取并解析请求体: JSON body 优先, 无 body 给 {}, 表单 fallback(官方 api_utils.get_request_json 原封)。"""
+    return await _coerce_request_data()
