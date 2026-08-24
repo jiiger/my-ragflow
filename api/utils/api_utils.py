@@ -9,13 +9,14 @@
 
 等 HTTP 层(第 2 步)再按需从官方补齐其余函数。
 """
-import logging
+
 import inspect
+import logging
 from copy import deepcopy
 from functools import wraps
 from typing import Any
 
-from quart import jsonify, has_app_context, request
+from quart import has_app_context, jsonify, request
 from werkzeug.exceptions import BadRequest as WerkzeugBadRequest
 
 try:
@@ -63,6 +64,24 @@ def get_data_error_result(code=RetCode.DATA_ERROR, message="Sorry! Data missing!
         if value is None and key != "code":
             continue
         response[key] = value
+    return _safe_jsonify(response)
+
+
+def get_error_data_result(
+    message="Sorry! Data missing!",
+    code=RetCode.DATA_ERROR,
+):
+    """与 get_data_error_result 同族的失败响应构造; 官方同时保留了这两个函数, 学习版原样补齐.
+
+    来源: 官方 api/utils/api_utils.py @ v0.24.0
+    """
+    result_dict = {"code": code, "message": message}
+    response = {}
+    for key, value in result_dict.items():
+        if value is None and key != "code":
+            continue
+        else:
+            response[key] = value
     return _safe_jsonify(response)
 
 
@@ -218,6 +237,7 @@ def validate_request(*args, **kwargs):
     或 @validate_request(flag=("a", "b")) 校验参数值必须落在给定集合。
     缺参/值非法时直接返回 ARGUMENT_ERROR, 不进入业务函数。
     """
+
     def process_args(input_arguments):
         no_arguments = []
         error_arguments = []
@@ -265,3 +285,19 @@ def validate_request(*args, **kwargs):
         return decorated_function
 
     return wrapper
+
+
+def not_allowed_parameters(*params):
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            input_arguments = await _coerce_request_data()
+            for param in params:
+                if param in input_arguments:
+                    return get_json_result(code=RetCode.ARGUMENT_ERROR, message=f"Parameter {param} isn't allowed")
+            if inspect.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

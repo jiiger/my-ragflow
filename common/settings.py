@@ -69,6 +69,12 @@ MAIL_PASSWORD = ""
 MAIL_DEFAULT_SENDER = ()
 MAIL_FRONTEND_URL = ""
 
+# ===== 官方 kb_app 等路由引用的运行期字段(⚠️ 对应依赖未移植, 先占位) =====
+DOC_ENGINE_INFINITY = False  # ⚠️ 文档引擎(ES/Infinity)未接入, 恒走 Elasticsearch 语义分支
+docStoreConn = None  # ⚠️ 文档存储连接(common/doc_store 未移植, 官方为 DocStoreConnection 实例)
+retriever = None  # ⚠️ 检索器(rag/utils/retriever 未移植), tags/知识图谱等接口暂不可用
+STORAGE_IMPL = None  # ⚠️ 对象存储实现(官方为 FileStorage 实例), remove_bucket 用 hasattr 兜底
+
 # move from rag.settings
 ES = {}
 INFINITY = {}
