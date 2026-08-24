@@ -74,6 +74,7 @@ DOC_ENGINE_INFINITY = False  # ⚠️ 文档引擎(ES/Infinity)未接入, 恒走
 docStoreConn = None  # ⚠️ 文档存储连接(common/doc_store 未移植, 官方为 DocStoreConnection 实例)
 retriever = None  # ⚠️ 检索器(rag/utils/retriever 未移植), tags/知识图谱等接口暂不可用
 STORAGE_IMPL = None  # ⚠️ 对象存储实现(官方为 FileStorage 实例), remove_bucket 用 hasattr 兜底
+ALLOWED_LLM_FACTORIES = None  # 官方 init_settings 从 conf 读 user_default_llm.allowed_factories; 精简版恒 None = 不限制厂商
 
 # move from rag.settings
 ES = {}

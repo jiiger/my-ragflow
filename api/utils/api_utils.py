@@ -1,13 +1,13 @@
-"""api/utils/api_utils.py — 学习版子集(只拆 knowledgebase_service 依赖的 4 个函数)。
+"""api/utils/api_utils.py — 学习版子集(按 HTTP 层需要从官方逐步补齐)。
 
-官方 api_utils.py 有 735 行, 依赖 quart/APIToken/MCPToolCallSession/LLMFactoriesService
-等还没建的东西。这里只保留自包含的部分:
-- deep_merge: 递归合并配置字典
-- _safe_jsonify: app 上下文里有 request 时返回 flask Response, 否则返回 dict
-- get_data_error_result: 统一错误响应
-- get_parser_config: 各切块模板(naive/qa/tag...)的默认配置合并
-
-等 HTTP 层(第 2 步)再按需从官方补齐其余函数。
+官方 api_utils.py 有 735 行, 依赖 APIToken/MCPToolCallSession 等尚未移植的模块;
+学习版按需保留自包含的函数(截至 2026-08-24 共 13 个):
+- deep_merge / get_parser_config: 配置合并工具
+- _safe_jsonify / get_json_result / get_data_error_result / get_error_data_result /
+  server_error_response: 统一响应构造
+- get_request_json / _coerce_request_data / validate_request / not_allowed_parameters:
+  请求体解析与参数校验
+- generate_confirmation_token / get_allowed_llm_factories: 令牌生成与 LLM 厂商白名单
 """
 
 import inspect
@@ -24,6 +24,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     QuartBadRequest = None
 
+from common import settings
 from common.constants import RetCode
 
 
@@ -301,3 +302,28 @@ def not_allowed_parameters(*params):
         return wrapper
 
     return decorator
+
+
+def generate_confirmation_token():
+    """生成 API 访问令牌(ragflow- 前缀 + 32 字节 url-safe 随机串)。
+
+    来源: 官方 api/utils/api_utils.py @ v0.24.0
+    """
+    import secrets
+
+    return "ragflow-" + secrets.token_urlsafe(32)
+
+
+def get_allowed_llm_factories() -> list:
+    """返回当前租户体系允许接入的 LLM 厂商列表(按 rank 排序)。
+
+    settings.ALLOWED_LLM_FACTORIES 为 None 时不限制; 否则只保留白名单内的厂商。
+    来源: 官方 api/utils/api_utils.py @ v0.24.0
+    """
+    from api.db.services.tenant_llm_service import LLMFactoriesService  # 函数内 import 防循环
+
+    factories = list(LLMFactoriesService.get_all(reverse=True, order_by="rank"))
+    if settings.ALLOWED_LLM_FACTORIES is None:
+        return factories
+
+    return [factory for factory in factories if factory.name in settings.ALLOWED_LLM_FACTORIES]
