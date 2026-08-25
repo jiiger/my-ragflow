@@ -454,8 +454,8 @@ def naive_merge(sections: str | list, chunk_token_num=128, delimiter="\n。；�
         - 位置串追加到文本尾, find(pos) < 0 防重复追加
         - 有自定义分隔符时整体重切: 每段独立成块, 不再按 token 合并
     ⚠️ 依赖: 官方在第 2 行函数内 import RAGFlowPdfParser(只用其 remove_tag 静态
-    方法剥 html 标签). deepdoc/parser/pdf_parser.py 尚未移植, 本函数调用时会
-    抛 ImportError —— 属预期, 等 pdf_parser 移植后自动点亮, 逻辑无需改动。
+    方法去除文本里的 PDF 位置标记 "@@页码,坐标##", 防止重叠拼接时位置串截半残留).
+    deepdoc/parser/pdf_parser.py 已于 2026-08-25 移植最小版(仅 remove_tag), 本函数可用。
     """
     from deepdoc.parser.pdf_parser import RAGFlowPdfParser
     if not sections:
