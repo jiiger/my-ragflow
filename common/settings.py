@@ -183,5 +183,18 @@ def init_settings():
         raise NotImplementedError(f"学习版仅支持 MINIO 对象存储, STORAGE_IMPL={STORAGE_IMPL_TYPE}")
     STORAGE_IMPL = StorageFactory.create(Storage[STORAGE_IMPL_TYPE])
 
+    # 文档引擎装配(官方 settings L246-270):只支持 elasticsearch。
+    # ES_CONN 单例在 import 时会真连 ES(官方 es_conn_pool 设计), 故延迟 import,
+    # 且必须先 set ES 配置再实例化; ES 容器未起时这里会明确报错(官方同语义)。
+    global docStoreConn, ES
+    doc_engine = os.getenv("DOC_ENGINE", "elasticsearch").lower()
+    if doc_engine == "elasticsearch":
+        ES = get_base_config("es", {})
+        from rag.utils.es_conn import ESConnection
+
+        docStoreConn = ESConnection()
+    else:
+        raise NotImplementedError(f"学习版仅支持 elasticsearch 文档引擎, DOC_ENGINE={doc_engine}")
+
 
 
