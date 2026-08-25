@@ -167,7 +167,7 @@ class MarkdownElementExtractor:
         toks = sorted(set(toks), key=lambda x: -len(x))
         return "|".join(re.escape(t) for t in toks if t)
 
-    def extract_elements(self, delimiter=None, include_meta=False):
+    def extract_elements(self, delimiter=None, include_meta=False) -> list:
         """提取元素(标题、代码块、列表等)。delimiter 存在就走正则整体切分,否则逐行扫描。"""
         sections = []
 
