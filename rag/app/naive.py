@@ -1,18 +1,3 @@
-#
-#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
 # ⚠️ 学习版裁剪说明: 官方 v0.24.0 本文件 1076 行, 按扩展名分发 docx/pdf/excel/
 # ppt/markdown/html/json/txt/doc 九类; 本文件仅保留 txt/code 分支(任务链第一环),
 # 其余分支的解析器导入全部含在官方顶部 import 中, 学习版不引入。
