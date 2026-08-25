@@ -1,4 +1,6 @@
 from .docx_parser import RAGFlowDocxParser as DocxParser
+from .excel_parser import RAGFlowExcelParser as ExcelParser
+from .ppt_parser import RAGFlowPptParser as PptParser
 from .txt_parser import RAGFlowTxtParser as TxtParser
 
 __all__ = [
