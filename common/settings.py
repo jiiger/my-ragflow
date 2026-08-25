@@ -3,6 +3,7 @@ from datetime import date
 import secrets
 
 from common.config_utils import get_base_config, decrypt_database_config
+from common.constants import SVR_QUEUE_NAME
 from api.constants import RAG_FLOW_SERVICE_NAME
 
 LLM = None
@@ -114,6 +115,22 @@ def _get_or_create_secret_key():
     new_key = secrets.token_hex(32)
     logging.warning("SECURITY WARNING: Using auto-generated SECRET_KEY.")
     return new_key
+
+
+def get_svr_queue_name(priority: int) -> str:
+    """任务队列名: 优先级 0 用基础队列名, 否则追加 _<priority>(官方同名方法 1:1)。
+
+    官方在 common/settings.py:130; document_service 里曾有本地等价 _svr_queue_name,
+    现在以本方法为准, 后续可清理重复实现。
+    """
+    if priority == 0:
+        return SVR_QUEUE_NAME
+    return f"{SVR_QUEUE_NAME}_{priority}"
+
+
+def get_svr_queue_names():
+    """task_executor 消费的全部队列名: 高优先级在前(官方 common/settings.py:135)。"""
+    return [get_svr_queue_name(priority) for priority in [1, 0]]
 
 
 def init_settings():

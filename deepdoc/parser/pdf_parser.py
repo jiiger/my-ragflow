@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 
+import logging
 import re
 
 
@@ -21,7 +22,7 @@ class RAGFlowPdfParser:
     """PDF 解析器 — 学习版最小占位。
 
     ⚠️ 官方 v0.24.0 全量 1800+ 行(OCR / 版面识别 / 表格抽取 / 章节切分 / crop 等),
-    本文件仅移植 rag/nlp naive_merge 家族依赖的 remove_tag 静态方法;
+    本文件仅移植 rag/nlp naive_merge 家族与 task_service 依赖的两个静态方法;
     其余方法见官方源码, 等 PDF 解析链需要时再逐方法补齐。
     """
 
@@ -37,3 +38,21 @@ class RAGFlowPdfParser:
         调用本方法, 防止上一块尾部的位置串被截半后残留进新块开头。
         """
         return re.sub(r"@@[\t0-9.-]+?##", "", txt)
+
+    @staticmethod
+    def total_page_number(fnm, binary=None):
+        """统计 PDF 页数:task_service.queue_tasks 按 task_page_size 切分页范围任务时用。
+
+        移植自官方 v0.24.0 pdf_parser.py:1367(逻辑 1:1, 仅去掉 LOCK_KEY
+        锁包装——那是官方对冲多进程 pdfplumber 共用的保护, 学习版单线程够用)。
+        """
+        try:
+            import pdfplumber
+            from io import BytesIO
+
+            pdf = pdfplumber.open(fnm) if not binary else pdfplumber.open(BytesIO(binary))
+            total_page = len(pdf.pages)
+            pdf.close()
+            return total_page
+        except Exception:
+            logging.exception("total_page_number")
