@@ -3,7 +3,8 @@ from datetime import date
 import secrets
 
 from common.config_utils import get_base_config, decrypt_database_config
-from common.constants import SVR_QUEUE_NAME
+from common.constants import SVR_QUEUE_NAME, Storage
+from rag.utils.minio_conn import RAGFlowMinio
 from api.constants import RAG_FLOW_SERVICE_NAME
 
 LLM = None
@@ -133,6 +134,23 @@ def get_svr_queue_names():
     return [get_svr_queue_name(priority) for priority in [1, 0]]
 
 
+class StorageFactory:
+    """对象存储工厂:按 STORAGE_IMPL_TYPE(MINIO/AWS_S3/...) 实例化对应连接器。
+
+    官方 common/settings.py:155 的 storage_mapping 有 7 个后端, 学习版只移植
+    MINIO, 其余类型显式报错而不是假装支持。
+    """
+    storage_mapping = {
+        Storage.MINIO: RAGFlowMinio,
+    }
+
+    @classmethod
+    def create(cls, storage: Storage):
+        if storage not in cls.storage_mapping:
+            raise NotImplementedError(f"学习版仅支持 MINIO 对象存储, 收到: {storage}")
+        return cls.storage_mapping[storage]()
+
+
 def init_settings():
     """⚠️ 学习版精简版 init_settings(SECRET_KEY 部分对齐官方, 其余裁剪)。
 
@@ -155,6 +173,15 @@ def init_settings():
 
     global SECRET_KEY
     SECRET_KEY = _get_or_create_secret_key()
+
+    # 对象存储装配(官方 settings L289-305):类型分支读 conf 连接配置, 工厂实例化单例。
+    # ⚠️ 官方此处还有 AWS_S3/AZURE/OSS/GCS 分支与 RAGFLOW_CRYPTO 加密包装, 学习版裁剪。
+    global MINIO, STORAGE_IMPL
+    if STORAGE_IMPL_TYPE == 'MINIO':
+        MINIO = decrypt_database_config(name="minio")
+    else:
+        raise NotImplementedError(f"学习版仅支持 MINIO 对象存储, STORAGE_IMPL={STORAGE_IMPL_TYPE}")
+    STORAGE_IMPL = StorageFactory.create(Storage[STORAGE_IMPL_TYPE])
 
 
 
