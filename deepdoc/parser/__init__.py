@@ -1,5 +1,6 @@
 from .docx_parser import RAGFlowDocxParser as DocxParser
 from .excel_parser import RAGFlowExcelParser as ExcelParser
+from .json_parser import RAGFlowJsonParser as JsonParser
 from .ppt_parser import RAGFlowPptParser as PptParser
 from .txt_parser import RAGFlowTxtParser as TxtParser
 
