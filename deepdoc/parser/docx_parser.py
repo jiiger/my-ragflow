@@ -1,0 +1,161 @@
+#
+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+"""docx 解析器:把 .docx 拆成 [(段落文本, 样式名)] 与 [表格文本] 两路输出。
+
+移植自官方 RAGFlow v0.24.0 deepdoc/parser/docx_parser.py(逻辑 1:1)。
+
+核心思路:
+- 段落:遍历 ``Document.paragraphs``,按 ``lastRenderedPageBreak`` 数页,
+  支持 from_page/to_page 截取;段落内先攒 run 文本再合并。
+- 表格:整表读成 pandas.DataFrame,统计主体单元格的"块类型"判定表格形态
+  (数字表/文本表),再把每行拼成 "表头1: 值1;表头2: 值2" 的句子;
+  列数 >3 时逐行成句,否则整个表合成一段。
+"""
+
+from collections import Counter
+from io import BytesIO
+import re
+
+from docx import Document
+import pandas as pd
+
+from rag.nlp import rag_tokenizer
+
+
+class RAGFlowDocxParser:
+
+    def __extract_table_content(self, tb):
+        """把 python-docx 的 Table 读成 DataFrame(每行一个 list of cell.text),交给表格组装。"""
+        df = []
+        for row in tb.rows:
+            df.append([c.text for c in row.cells])
+        return self.__compose_table_content(pd.DataFrame(df))
+
+    def __compose_table_content(self, df):
+        """表格 → 文本行:识别表头行,把数据行拼成 "表头: 值;..." 的句子。
+
+        先用 blockType 给每个单元格分类,取数据区(跳过首行)中出现最多的类型作为
+        "数据列特征";若它是 Nu(数字),说明首行是表头、且中间可能还有多级表头行。
+        """
+
+        def blockType(b):
+            # 单元格类型:日期(Dt)/编号(DT)/数字(Nu)/大写串(Ca)/英文(En)/
+            # 数字开头的混合串(NE)/单字符(Sg)/短中文(Tx)/长文(Lx)/人名(Nr)/其他(Ot)
+            pattern = [
+                ("^(20|19)[0-9]{2}[年/-][0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
+                (r"^(20|19)[0-9]{2}年$", "Dt"),
+                (r"^(20|19)[0-9]{2}[年/-][0-9]{1,2}月*$", "Dt"),
+                ("^[0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
+                (r"^第*[一二三四1-4]季度$", "Dt"),
+                (r"^(20|19)[0-9]{2}年*[一二三四1-4]季度$", "Dt"),
+                (r"^(20|19)[0-9]{2}[ABCDE]$", "DT"),
+                ("^[0-9.,+%/ -]+$", "Nu"),
+                (r"^[0-9A-Z/\._~-]+$", "Ca"),
+                (r"^[A-Z]*[a-z' -]+$", "En"),
+                (r"^[0-9.,+-]+[0-9A-Za-z/$￥%<>（）()' -]+$", "NE"),
+                (r"^.{1}$", "Sg")
+            ]
+            for p, n in pattern:
+                if re.search(p, b):
+                    return n
+            tks = [t for t in rag_tokenizer.tokenize(b).split() if len(t) > 1]
+            if len(tks) > 3:
+                if len(tks) < 12:
+                    return "Tx"
+                else:
+                    return "Lx"
+
+            if len(tks) == 1 and rag_tokenizer.tag(tks[0]) == "nr":
+                return "Nr"
+
+            return "Ot"
+
+        if len(df) < 2:
+            return []
+        max_type = Counter([blockType(str(df.iloc[i, j])) for i in range(
+            1, len(df)) for j in range(len(df.iloc[i, :]))])
+        max_type = max(max_type.items(), key=lambda x: x[1])[0]
+
+        colnm = len(df.iloc[0, :])
+        hdrows = [0]  # header is not necessarily appear in the first line
+        if max_type == "Nu":
+            for r in range(1, len(df)):
+                tys = Counter([blockType(str(df.iloc[r, j]))
+                              for j in range(len(df.iloc[r, :]))])
+                tys = max(tys.items(), key=lambda x: x[1])[0]
+                if tys != max_type:
+                    hdrows.append(r)
+
+        lines = []
+        for i in range(1, len(df)):
+            if i in hdrows:
+                continue
+            hr = [r - i for r in hdrows]
+            hr = [r for r in hr if r < 0]
+            t = len(hr) - 1
+            while t > 0:
+                if hr[t] - hr[t - 1] > 1:
+                    hr = hr[t:]
+                    break
+                t -= 1
+            headers = []
+            for j in range(len(df.iloc[i, :])):
+                t = []
+                for h in hr:
+                    x = str(df.iloc[i + h, j]).strip()
+                    if x in t:
+                        continue
+                    t.append(x)
+                t = ",".join(t)
+                if t:
+                    t += ": "
+                headers.append(t)
+            cells = []
+            for j in range(len(df.iloc[i, :])):
+                if not str(df.iloc[i, j]):
+                    continue
+                cells.append(headers[j] + str(df.iloc[i, j]))
+            lines.append(";".join(cells))
+
+        if colnm > 3:
+            return lines
+        return ["\n".join(lines)]
+
+    def __call__(self, fnm, from_page=0, to_page=100000000):
+        """入口:fnm 可以是文件路径(str)或二进制内容(bytes);返回 (secs, tbls)。"""
+        self.doc = Document(fnm) if isinstance(
+            fnm, str) else Document(BytesIO(fnm))
+        pn = 0 # parsed page
+        secs = [] # parsed contents
+        for p in self.doc.paragraphs:
+            if pn > to_page:
+                break
+
+            runs_within_single_paragraph = [] # save runs within the range of pages
+            for run in p.runs:
+                if pn > to_page:
+                    break
+                if from_page <= pn < to_page and p.text.strip():
+                    runs_within_single_paragraph.append(run.text) # append run.text first
+
+                # wrap page break checker into a static method
+                if 'lastRenderedPageBreak' in run._element.xml:
+                    pn += 1
+
+            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, 'name') else '')) # then concat run.text as part of the paragraph
+
+        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
+        return secs, tbls
