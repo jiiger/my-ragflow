@@ -1,9 +1,11 @@
+import json
 import os
 from datetime import date
 import secrets
 
 from common.config_utils import get_base_config, decrypt_database_config
 from common.constants import SVR_QUEUE_NAME, Storage
+from common.file_utils import get_project_base_directory
 from rag.utils.minio_conn import RAGFlowMinio
 from api.constants import RAG_FLOW_SERVICE_NAME
 
@@ -151,17 +153,121 @@ class StorageFactory:
         return cls.storage_mapping[storage]()
 
 
-def init_settings():
-    """⚠️ 学习版精简版 init_settings(SECRET_KEY 部分对齐官方, 其余裁剪)。
+def _parse_model_entry(entry):
+    """把 conf 里单个模型条目规范成 dict(官方 common/settings.py:366 1:1)。
 
-    官方 init_settings 有 228 行(user_default_llm 各模型配置解析/llm_factories.json/
-    doc_store/minio/s3 等), 学习版 settings 为精简版, 只在 HTTP 层需要时初始化:
-    SECRET_KEY(签名 session)、oauth 配置(http_client._is_sensitive_url / user_app 第三方登录)。
-    CHAT_CFG/EMBEDDING_CFG 等模型配置在 rag/llm 侧按需读取, 不在这里解析。
+    支持两种写法: "模型名" 字符串, 或 {"name"/"model", "factory", "api_key", "base_url"} dict。
+    """
+    if isinstance(entry, str):
+        return {"name": entry, "factory": None, "api_key": None, "base_url": None}
+    if isinstance(entry, dict):
+        name = entry.get("name") or entry.get("model") or ""
+        return {
+            "name": name,
+            "factory": entry.get("factory"),
+            "api_key": entry.get("api_key"),
+            "base_url": entry.get("base_url"),
+        }
+    return {"name": "", "factory": None, "api_key": None, "base_url": None}
+
+
+def _resolve_per_model_config(entry_dict, backup_factory, backup_api_key, backup_base_url):
+    """模型条目解析: 补齐缺省的 factory/api_key/base_url, 模型名拼上 "@厂商" 后缀
+    (官方 common/settings.py:380 1:1)。
+
+    CHAT_CFG 等 *_CFG 的最终形态: {"model": "xxx@yyy", "factory": "yyy",
+    "api_key": "...", "base_url": "..."}; get_init_tenant_llm / LLMBundle 都消费它。
+    """
+    name = (entry_dict.get("name") or "").strip()
+    m_factory = entry_dict.get("factory") or backup_factory or ""
+    m_api_key = entry_dict.get("api_key") or backup_api_key or ""
+    m_base_url = entry_dict.get("base_url") or backup_base_url or ""
+
+    if name and "@" not in name and m_factory:
+        name = f"{name}@{m_factory}"
+
+    return {
+        "model": name,
+        "factory": m_factory,
+        "api_key": m_api_key,
+        "base_url": m_base_url,
+    }
+
+
+def init_settings():
+    """⚠️ 学习版 init_settings(模型配置解析已按官方补全, 其余按需裁剪)。
+
+    与官方 228 行 init_settings 的差异:
+    - ✅ 补全: user_default_llm 解析(LLM_FACTORY/BASE_URL/API_KEY/PARSERS/
+      *_MDL/*_CFG)+ llm_factories.json 加载(FACTORY_LLM_INFOS)
+    - ⚠️ 裁剪: HOST_IP/HOST_PORT(入口自行从 conf 读)、doc_store 多引擎
+      (仅 ES)、对象存储多后端(仅 MINIO)、检索器 retriever/kg_retriever
+      (None 占位)、SMTP 邮件、RAGFLOW_CRYPTO 加密存储、sandbox。
+    SECRET_KEY、oauth/authentication、MINIO、ES 连接部分保留官方逻辑。
     """
     global SECRET_KEY, DATABASE, DATABASE_TYPE
     DATABASE_TYPE = os.getenv("DB_TYPE", "mysql")
     DATABASE = decrypt_database_config(name=DATABASE_TYPE)
+
+    # ═══ 模型默认配置解析(2026-08-26 补全,对齐官方 L176-225)═══
+    # 官方 init_settings 从 conf/service_conf.yaml 的 user_default_llm 段读取
+    # 默认模型, 并加载 conf/llm_factories.json 的厂商目录。学习版此前裁剪
+    # (CFG/MDL 全空串), 导致 get_init_tenant_llm 返回空、租户绑不上模型;
+    # 现按官方逻辑补回, 未配置的模型类型保持空串(不会报错)。
+    global ALLOWED_LLM_FACTORIES, LLM_FACTORY, LLM_BASE_URL
+    llm_settings = get_base_config("user_default_llm", {}) or {}
+    llm_default_models = llm_settings.get("default_models", {}) or {}
+    LLM_FACTORY = llm_settings.get("factory", "") or ""
+    LLM_BASE_URL = llm_settings.get("base_url", "") or ""
+    ALLOWED_LLM_FACTORIES = llm_settings.get("allowed_factories", None)
+
+    global REGISTER_ENABLED
+    try:
+        REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
+    except Exception:
+        pass
+
+    global FACTORY_LLM_INFOS
+    try:
+        with open(os.path.join(get_project_base_directory(), "conf", "llm_factories.json"), "r") as f:
+            FACTORY_LLM_INFOS = json.load(f)["factory_llm_infos"]
+    except Exception:
+        FACTORY_LLM_INFOS = []
+
+    global API_KEY
+    API_KEY = llm_settings.get("api_key")
+
+    global PARSERS
+    PARSERS = llm_settings.get(
+        "parsers", "naive:General,qa:Q&A,resume:Resume,manual:Manual,table:Table,paper:Paper,book:Book,laws:Laws,presentation:Presentation,picture:Picture,one:One,audio:Audio,email:Email,tag:Tag"
+    )
+
+    global CHAT_MDL, EMBEDDING_MDL, RERANK_MDL, ASR_MDL, IMAGE2TEXT_MDL
+    chat_entry = _parse_model_entry(llm_default_models.get("chat_model", CHAT_MDL))
+    embedding_entry = _parse_model_entry(llm_default_models.get("embedding_model", EMBEDDING_MDL))
+    rerank_entry = _parse_model_entry(llm_default_models.get("rerank_model", RERANK_MDL))
+    asr_entry = _parse_model_entry(llm_default_models.get("asr_model", ASR_MDL))
+    image2text_entry = _parse_model_entry(llm_default_models.get("image2text_model", IMAGE2TEXT_MDL))
+
+    global CHAT_CFG, EMBEDDING_CFG, RERANK_CFG, ASR_CFG, IMAGE2TEXT_CFG
+    CHAT_CFG = _resolve_per_model_config(chat_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    EMBEDDING_CFG = _resolve_per_model_config(embedding_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    RERANK_CFG = _resolve_per_model_config(rerank_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    ASR_CFG = _resolve_per_model_config(asr_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+    IMAGE2TEXT_CFG = _resolve_per_model_config(image2text_entry, LLM_FACTORY, API_KEY, LLM_BASE_URL)
+
+    CHAT_MDL = CHAT_CFG.get("model", "") or ""
+    EMBEDDING_MDL = EMBEDDING_CFG.get("model", "") or ""
+    compose_profiles = os.getenv("COMPOSE_PROFILES", "")
+    if "tei-" in compose_profiles:
+        EMBEDDING_MDL = os.getenv("TEI_MODEL", EMBEDDING_MDL or "BAAI/bge-small-en-v1.5")
+    RERANK_MDL = RERANK_CFG.get("model", "") or ""
+    ASR_MDL = ASR_CFG.get("model", "") or ""
+    IMAGE2TEXT_MDL = IMAGE2TEXT_CFG.get("model", "") or ""
+
+    # ⚠️ 裁剪:官方此处(L227-229)还从 ragflow 段读 HOST_IP/HOST_PORT 填入
+    # settings——学习版入口 ragflow_server.py 自行从 conf 读(见该文件适配说明),
+    # 不在这里重复填充, 避免两处配置源不一致。
 
     global GITHUB_OAUTH, FEISHU_OAUTH, OAUTH_CONFIG, CLIENT_AUTHENTICATION, HTTP_APP_KEY
     authentication_conf = get_base_config("authentication", {})
