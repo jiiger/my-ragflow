@@ -15,6 +15,9 @@ wheels/
 .coverage
 htmlcov/
 
+# Runtime logs (ragflow_server.py writes logs/ragflow_server.log)
+logs/
+
 # Editors (machine-specific settings, e.g. absolute venv paths)
 .vscode/
 .idea/

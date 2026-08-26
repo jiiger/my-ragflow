@@ -65,6 +65,12 @@ def get_init_tenant_llm(user_id):
         settings.IMAGE2TEXT_CFG,
         settings.RERANK_CFG,
     ]:
+        # ⚠️ 学习版适配:官方 init_settings 会把这几项解析成 dict(conf 的
+        # user_default_llm), 学习版精简 settings 不解析(保持空字符串/None)。
+        # 未配置模型时跳过, 返回空 tenant_llm——官方此处无保护, 因为官方
+        # settings 保证必有 dict; 学习版未配模型时不能 TypeError 阻塞建超管。
+        if not factory_config:
+            continue
         factory_name = factory_config["factory"]
         if factory_name not in seen:
             seen.add(factory_name)
