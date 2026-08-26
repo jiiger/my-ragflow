@@ -76,7 +76,7 @@ MAIL_FRONTEND_URL = ""
 # ===== 官方 kb_app 等路由引用的运行期字段(⚠️ 对应依赖未移植, 先占位) =====
 DOC_ENGINE_INFINITY = False  # ⚠️ 文档引擎(ES/Infinity)未接入, 恒走 Elasticsearch 语义分支
 docStoreConn = None  # ⚠️ 文档存储连接(common/doc_store 未移植, 官方为 DocStoreConnection 实例)
-retriever = None  # ⚠️ 检索器(rag/utils/retriever 未移植), tags/知识图谱等接口暂不可用
+retriever = None  # init_settings 装配为 rag.nlp.search.Dealer(检索器); kg_retriever 恒 None(无 graphrag)
 STORAGE_IMPL = None  # ⚠️ 对象存储实现(官方为 FileStorage 实例), remove_bucket 用 hasattr 兜底
 ALLOWED_LLM_FACTORIES = None  # 官方 init_settings 从 conf 读 user_default_llm.allowed_factories; 精简版恒 None = 不限制厂商
 
@@ -301,6 +301,16 @@ def init_settings():
         docStoreConn = ESConnection()
     else:
         raise NotImplementedError(f"学习版仅支持 elasticsearch 文档引擎, DOC_ENGINE={doc_engine}")
+
+    # 检索器装配(官方 settings L323-327):retriever 挂上检索核心 Dealer,
+    # kb_app 的 tags/知识图谱/检索类接口由延迟 import 点亮。
+    global retriever, kg_retriever
+    from rag.nlp.search import Dealer
+
+    retriever = Dealer(docStoreConn)
+    # ⚠️ 裁剪:官方此处还 `from rag.graphrag import search as kg_search;
+    # kg_retriever = kg_search.KGSearch(docStoreConn)`——学习版无 rag/graphrag,
+    # kg_retriever 保持模块级 None 占位(仅图谱检索接口不可用)。
 
 
 
