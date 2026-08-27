@@ -298,12 +298,6 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
 
 
 async def async_chat(dialog, messages, stream=True, **kwargs):
-    # ⚠️ 延迟 import: 以下模块未移植, 移植后点上提为顶层 import
-    from rag.advanced_rag import DeepResearcher  # ⚠️ 未移植(深度研究分支)
-    from rag.app.tag import label_question  # ⚠️ 未移植(问题分类特征)
-    from api.db.services.doc_metadata_service import DocMetadataService  # ⚠️ 未移植(元数据链)
-    from common.metadata_utils import apply_meta_data_filter  # ⚠️ 未移植(元数据过滤)
-    from rag.utils.tavily_conn import Tavily  # ⚠️ 未移植(外网检索)
     logging.debug("Begin async_chat")
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
@@ -386,6 +380,9 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
         questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
     if dialog.meta_data_filter:
+        # ⚠️ 延迟 import: 元数据链(doc_metadata_service/metadata_utils)未移植
+        from api.db.services.doc_metadata_service import DocMetadataService
+        from common.metadata_utils import apply_meta_data_filter
         metas = DocMetadataService.get_flatted_meta_by_kbs(dialog.kb_ids)
         attachments = await apply_meta_data_filter(
             dialog.meta_data_filter,
@@ -409,6 +406,8 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
         if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
+            # ⚠️ 延迟 import: rag.advanced_rag 未移植, 仅深度研究分支依赖
+            from rag.advanced_rag import DeepResearcher
             reasoner = DeepResearcher(
                 chat_mdl,
                 prompt_config,
@@ -445,6 +444,8 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
 
         else:
             if embd_mdl:
+                # ⚠️ 延迟 import: rag.app.tag 未移植, 仅问题分类特征用
+                from rag.app.tag import label_question
                 kbinfos = await retriever.retrieval(
                     " ".join(questions),
                     embd_mdl,
@@ -466,6 +467,8 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
                         kbinfos["chunks"] = cks
                 kbinfos["chunks"] = retriever.retrieval_by_children(kbinfos["chunks"], tenant_ids)
             if prompt_config.get("tavily_api_key"):
+                # ⚠️ 延迟 import: rag.utils.tavily_conn 未移植, 仅外网检索用
+                from rag.utils.tavily_conn import Tavily
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
@@ -1114,10 +1117,6 @@ async def _stream_with_think_delta(stream_iter, min_tokens: int = 16):
         yield ("marker", "</think>", state)
 
 async def async_ask(question, kb_ids, tenant_id, chat_llm_name=None, search_config={}):
-    # ⚠️ 延迟 import: 以下模块未移植, 移植后点亮
-    from api.db.services.doc_metadata_service import DocMetadataService  # ⚠️ 未移植(元数据链)
-    from common.metadata_utils import apply_meta_data_filter  # ⚠️ 未移植(元数据过滤)
-    from rag.app.tag import label_question  # ⚠️ 未移植(问题分类特征)
     doc_ids = search_config.get("doc_ids", [])
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
@@ -1139,9 +1138,14 @@ async def async_ask(question, kb_ids, tenant_id, chat_llm_name=None, search_conf
     tenant_ids = list(set([kb.tenant_id for kb in kbs]))
 
     if meta_data_filter:
+        # ⚠️ 延迟 import: 元数据链未移植
+        from api.db.services.doc_metadata_service import DocMetadataService
+        from common.metadata_utils import apply_meta_data_filter
         metas = DocMetadataService.get_flatted_meta_by_kbs(kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
+    # ⚠️ 延迟 import: rag.app.tag 未移植, 仅问题分类特征用
+    from rag.app.tag import label_question
     kbinfos = await retriever.retrieval(
         question=question,
         embd_mdl=embd_mdl,
@@ -1199,10 +1203,6 @@ async def async_ask(question, kb_ids, tenant_id, chat_llm_name=None, search_conf
 
 
 async def gen_mindmap(question, kb_ids, tenant_id, search_config={}):
-    # ⚠️ 延迟 import: 以下模块未移植, 移植后点亮
-    from api.db.services.doc_metadata_service import DocMetadataService  # ⚠️ 未移植(元数据链)
-    from common.metadata_utils import apply_meta_data_filter  # ⚠️ 未移植(元数据过滤)
-    from rag.app.tag import label_question  # ⚠️ 未移植(问题分类特征)
     meta_data_filter = search_config.get("meta_data_filter", {})
     doc_ids = search_config.get("doc_ids", [])
     rerank_id = search_config.get("rerank_id", "")
@@ -1219,9 +1219,14 @@ async def gen_mindmap(question, kb_ids, tenant_id, search_config={}):
         rerank_mdl = LLMBundle(tenant_id, LLMType.RERANK, rerank_id)
 
     if meta_data_filter:
+        # ⚠️ 延迟 import: 元数据链未移植
+        from api.db.services.doc_metadata_service import DocMetadataService
+        from common.metadata_utils import apply_meta_data_filter
         metas = DocMetadataService.get_flatted_meta_by_kbs(kb_ids)
         doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
 
+    # ⚠️ 延迟 import: rag.app.tag 未移植, 仅问题分类特征用
+    from rag.app.tag import label_question
     ranks = await settings.retriever.retrieval(
         question=question,
         embd_mdl=embd_mdl,
