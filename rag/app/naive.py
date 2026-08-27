@@ -1,8 +1,9 @@
 # ⚠️ 学习版裁剪说明: 官方 v0.24.0 本文件 1076 行, 按扩展名分发 docx/pdf/excel/
-# txt/code/markdown/html/json/doc 九类。学习版已移植其中六路:
-#   docx(基础版, 无图片/标题树增强) / csv+xlsx / txt+code / md / html / json
-# 裁剪: pdf(依赖 pdf_parser 完整版+OCR 模型)、doc(依赖 tika 外部服务)、
-#       TCADP(腾讯云 API)、vision 模型增强(依赖 LLMBundle)、
+# txt/code/markdown/html/json/doc 九类。学习版已移植:
+#   docx(基础版) / pdf(纯文本链可用, 视觉链待 deepdoc.vision) / csv+xlsx /
+#   txt+code / md / html / json
+# 裁剪: doc(依赖 tika 外部服务)、TCADP(腾讯云 API)、mineru/docling/paddleocr
+#       (外部 OCR 服务)、vision 模型增强(依赖 LLMBundle + deepdoc.vision)、
 #       内嵌文件提取与 hyperlink 链接分析(依赖 rag/utils/file_utils.py)。
 
 import logging
@@ -15,9 +16,12 @@ from markdown import markdown
 from PIL import Image
 
 from common.float_utils import normalize_overlapped_percent
+from common.parser_config_utils import normalize_layout_recognizer
 from common.token_utils import num_tokens_from_string
-from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, TxtParser
+from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
+from deepdoc.parser.pdf_parser import PlainParser
 from rag.nlp import (
+    append_context2table_image4pdf,
     concat_img,
     doc_tokenize_chunks_with_images,
     find_codec,
@@ -29,6 +33,49 @@ from rag.nlp import (
     tokenize_chunks_with_images,
     tokenize_table,
 )
+
+
+def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    """PDF 视觉链(官方 1:1 结构)。PdfParser = RAGFlowPdfParser 完整管线。
+
+    ⚠️ 依赖 deepdoc.vision(未移植) → 实例化时抛 ModuleNotFoundError, 属预期。
+    """
+    pdf_parser = pdf_cls() if pdf_cls else PdfParser()
+    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
+    # ⚠️ 官方此处套 vision_figure_parser_pdf_wrapper(视觉模型看图理解表格/插图, 依赖 LLM 视觉链), 学习版裁剪
+    return sections, tables, pdf_parser
+
+
+def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
+    """PDF 纯文本链(零模型依赖)。
+
+    PlainParser 只做 pypdf.extract_text + outline 目录;配置非空时走 VisionParser
+    (视觉 LLM 看图描述, 依赖 RAGFlowPdfParser 管线, 未移植 → 预期报错)。
+    """
+    layout_recognizer = (kwargs.get("layout_recognizer") or "").strip()
+    if (not layout_recognizer) or (layout_recognizer == "Plain Text"):
+        pdf_parser = PlainParser()
+    else:
+        # ⚠️ 延迟 import: VisionParser 视觉链(LLMBundle + RAGFlowPdfParser 管线未移植)
+        from deepdoc.parser.pdf_parser import VisionParser
+        tenant_id = kwargs.get("tenant_id")
+        if not tenant_id:
+            raise ValueError("tenant_id is required when using vision layout recognizer")
+        from api.db.services.llm_service import LLMBundle
+        from common.constants import LLMType
+        vision_model = LLMBundle(tenant_id, LLMType.IMAGE2TEXT, llm_name=layout_recognizer, lang=kwargs.get("lang", "Chinese"))
+        pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
+
+    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
+    return sections, tables, pdf_parser
+
+
+# ⚠️ 官方注册表含 mineru/docling/tcadp/paddleocr(外部 OCR/解析服务), 学习版仅保留本地两条链;
+# PARSERS.get(name, by_plaintext) 使未注册名静默落纯文本(与官方默认一致)
+PARSERS = {
+    "deepdoc": by_deepdoc,
+    "plaintext": by_plaintext,  # default
+}
 
 
 class Markdown(MarkdownParser):
@@ -233,7 +280,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     res = []
-    pdf_parser = None  # ⚠️ 学习版恒为 None: tokenize_chunks 走伪位置分支, 不裁图
+    pdf_parser = None  # pdf 分支会赋值为解析器实例; tokenize_chunks 对未实现 crop 的 parser 兜底走伪位置
     section_images = None
 
     is_root = kwargs.get("is_root", True)
@@ -257,7 +304,33 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        raise NotImplementedError("学习版 naive 未移植 pdf 解析链(官方 by_deepdoc/by_plaintext + pdf_parser 完整版/OCR 模型): {}".format(filename))
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        # ⚠️ 官方此处 analyze_hyperlink → extract_links_from_pdf(链接抽取), 学习版裁剪(与 docx 分支一致)
+        if isinstance(layout_recognizer, bool):
+            layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
+        name = layout_recognizer.strip().lower()
+        parser = PARSERS.get(name, by_plaintext)
+        callback(0.1, "Start to parse.")
+        sections, tables, pdf_parser = parser(
+            filename=filename,
+            binary=binary,
+            from_page=from_page,
+            to_page=to_page,
+            lang=lang,
+            callback=callback,
+            layout_recognizer=layout_recognizer,
+            **kwargs,
+        )
+
+        if not sections and not tables:
+            return []
+
+        if table_context_size or image_context_size:
+            tables = append_context2table_image4pdf(sections, tables, image_context_size)
+
+        # ⚠️ 官方此处 name in [tcadp/docling/mineru/paddleocr] 时 chunk_token_num=0, 学习版无外部 parser
+        res = tokenize_table(tables, doc, is_english)
+        callback(0.8, "Finish parsing.")
 
     elif re.search(r"\.(csv|xlsx?)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
