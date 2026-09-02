@@ -344,7 +344,22 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
 
 async def task_manager():
-    """单任务执行器:collect → 绑定 embedding → 建索引 → 解析 → 向量化 → 入库。"""
+    """单任务执行器:collect → 绑定 embedding → 建索引 → 解析 → 向量化 → 入库。
+
+    ⚠️ 官方同款: 外层 try/finally 里 task_limiter.release() —— main 循环
+    acquire 满 MAX_CONCURRENT_TASKS 个信号量后, 每个 worker 处理完必须释放
+    才能让 main 继续 acquire 补位消费队列。若漏了 release, 信号量耗尽后
+    main 永久卡在 acquire(), 队列新任务再也没人消费(2026-09-02 实证死锁)。
+    """
+    global DONE_TASKS, FAILED_TASKS, CURRENT_TASKS
+    try:
+        await _task_handler()
+    finally:
+        task_limiter.release()
+
+
+async def _task_handler():
+    """原 task_manager 主体(移入, 供外层 finally 统一释放信号量)。"""
     global DONE_TASKS, FAILED_TASKS, CURRENT_TASKS
 
     redis_msg, task = await collect()
