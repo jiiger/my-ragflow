@@ -1,9 +1,7 @@
 import asyncio
 import logging
 
-from quart_auth import current_user
-
-from api.apps import login_required
+from api.apps import login_required, current_user
 from api.db import UserTenantRole
 from api.db.db_models import UserTenant
 from api.db.services.user_service import UserService, UserTenantService
