@@ -20,6 +20,7 @@ from common.parser_config_utils import normalize_layout_recognizer
 from common.token_utils import num_tokens_from_string
 from deepdoc.parser import DocxParser, ExcelParser, HtmlParser, JsonParser, MarkdownElementExtractor, MarkdownParser, PdfParser, TxtParser
 from deepdoc.parser.pdf_parser import PlainParser
+from rag.utils.file_utils import extract_embed_file, extract_links_from_pdf, extract_links_from_docx, extract_html
 from rag.nlp import (
     append_context2table_image4pdf,
     concat_img,
@@ -258,7 +259,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     callback = callback or (lambda prog=None, msg="": None)
 
     urls = set()
-    # ⚠️ 官方此处还有 url_res/embed_res(analyze_hyperlink+内嵌文件消费), 学习版裁剪
+    url_res = []
 
     is_english = lang.lower() == "english"  # is_english(cks)
     parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
@@ -284,12 +285,42 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     section_images = None
 
     is_root = kwargs.get("is_root", True)
-    # ⚠️ 官方此处: is_root 时 extract_embed_file 提取内嵌文件并递归 chunk, 学习版裁剪(依赖 file_utils)
+    embed_res = []
+    if is_root:
+        # 内嵌文件提取(仅根调用): 从 OOXML/OLE 包里抽内嵌对象并递归 chunk
+        embeds = []
+        if binary is not None:
+            embeds = extract_embed_file(binary)
+        else:
+            raise Exception("Embedding extraction from file path is not supported.")
+
+        for embed_filename, embed_bytes in embeds:
+            try:
+                sub_res = chunk(embed_filename, binary=embed_bytes, lang=lang, callback=callback, is_root=False, **kwargs) or []
+                embed_res.extend(sub_res)
+            except Exception as e:
+                error_msg = f"Failed to chunk embed {embed_filename}: {e}"
+                logging.error(error_msg)
+                if callback:
+                    callback(0.05, error_msg)
+                continue
 
     if re.search(r"\.docx$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        # ⚠️ 官方此处: analyze_hyperlink 链接提取 + load_from_xml_v2 补丁 + Docx 豪华子类
-        # (图片、标题树、表格样式、to_markdown), 学习版用基础 DocxParser 替代:
+        # analyze_hyperlink(官方 1:1): 抽 docx 超链接 → 抓网页 → 递归按 url 或 .html 名走 chunk
+        if parser_config.get("analyze_hyperlink", False) and is_root:
+            urls = extract_links_from_docx(binary)
+            for index, url in enumerate(urls):
+                html_bytes, metadata = extract_html(url)
+                if not html_bytes:
+                    continue
+                try:
+                    sub_url_res = chunk(url, html_bytes, callback=callback, lang=lang, is_root=False, **kwargs)
+                except Exception as e:
+                    logging.info(f"Failed to chunk url in registered file type {url}: {e}")
+                    sub_url_res = chunk(f"{index}.html", html_bytes, callback=callback, lang=lang, is_root=False, **kwargs)
+                url_res.extend(sub_url_res)
+        # ⚠️ 官方此处 load_from_xml_v2 补丁 + Docx 豪华子类(图片、标题树、表格样式), 学习版用基础 DocxParser 替代:
         # 它的 __call__ 只收一个参数(路径或 bytes), 返回 (段落[(text, style)], 表格[内容]),
         # 组装成 (text, image, table) 三元组喂 naive_merge_docx
         secs, tbls = DocxParser()(binary if binary is not None else filename)
@@ -301,11 +332,15 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
         res.extend(doc_tokenize_chunks_with_images(chunks, doc, is_english, child_delimiters_pattern=child_deli))
         logging.info("naive_merge({}): {}".format(filename, timer() - st))
+        res.extend(embed_res)
+        res.extend(url_res)
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
         layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
-        # ⚠️ 官方此处 analyze_hyperlink → extract_links_from_pdf(链接抽取), 学习版裁剪(与 docx 分支一致)
+        # analyze_hyperlink(官方 1:1): 抽 pdf 超链接, 尾部统一 extract_html 消费
+        if parser_config.get("analyze_hyperlink", False) and is_root:
+            urls = extract_links_from_pdf(binary)
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "Plain Text"
         name = layout_recognizer.strip().lower()
@@ -447,5 +482,26 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
     logging.info("naive_merge({}): {}".format(filename, timer() - st))
 
-    # ⚠️ 官方尾部: urls 链接分析的 extract_html 消费 + embed_res 内嵌结果合并, 学习版裁剪
+    # 官方尾部: analyze_hyperlink 收集到的 urls 统一 extract_html 抓网页再递归 chunk
+    if urls and parser_config.get("analyze_hyperlink", False) and is_root:
+        urls = set(urls)
+        for index, url in enumerate(urls):
+            try:
+                html_bytes, metadata = extract_html(url)
+            except Exception as e:
+                logging.info(f"Failed to extract html from {url}: {e}")
+                continue
+            if not html_bytes:
+                continue
+            try:
+                sub_url_res = chunk(url, html_bytes, callback=callback, lang=lang, is_root=False, **kwargs)
+            except Exception as e:
+                logging.info(f"Failed to chunk url in registered file type {url}: {e}")
+                sub_url_res = chunk(f"{index}.html", html_bytes, callback=callback, lang=lang, is_root=False, **kwargs)
+            url_res.extend(sub_url_res)
+
+    if embed_res:
+        res.extend(embed_res)
+    if url_res:
+        res.extend(url_res)
     return res
