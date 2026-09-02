@@ -347,6 +347,12 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
         attachments_ = "\n\n".join(FileService.get_files(messages[-1]["files"]))
 
     prompt_config = dialog.prompt_config
+    # ⚠️ 健壮化: 官方 Dialog.prompt_config 有 DB 默认(system/prologue/parameters /
+    # empty_response), 学习版经 API 建的最小化 dialog 可能缺键, 此处按官方默认补齐,
+    # 避免下游硬索引 KeyError(有键时行为与官方一致)
+    for _k, _v in {"system": "", "prologue": "Hi! I'm your assistant.",
+                   "parameters": [], "empty_response": "Sorry! No relevant content was found in the knowledge base!"}.items():
+        prompt_config.setdefault(_k, _v)
     field_map = KnowledgebaseService.get_field_map(dialog.kb_ids)
     logging.debug(f"field_map retrieved: {field_map}")
     # try to use sql if field mapping is good to go
@@ -363,7 +369,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     param_keys = [p["key"] for p in prompt_config.get("parameters", [])]
     logging.debug(f"attachments={attachments}, param_keys={param_keys}, embd_mdl={embd_mdl}")
 
-    for p in prompt_config["parameters"]:
+    for p in prompt_config.get("parameters", []):
         if p["key"] == "knowledge":
             continue
         if p["key"] not in kwargs and not p["optional"]:

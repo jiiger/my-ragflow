@@ -408,7 +408,10 @@ async def task_manager():
             ck["create_time"] = str(datetime.now()).replace("T", " ")[:19]
             ck["create_timestamp_flt"] = datetime.now().timestamp()
             if not ck.get("id"):
-                ck["id"] = xxhash.xxh64((ck["text"] + str(ck["doc_id"])).encode("utf-8")).hexdigest()
+                # ⚠️ 适配:官方 chunk 带 text 字段(算 id 后改名 content_with_weight);
+                # 学习版 naive 移植版直接产出 content_with_weight(无 text 中间态),
+                # 故 id 兜底用 content_with_weight(embedding 已正确读它)
+                ck["id"] = xxhash.xxh64((ck["content_with_weight"] + str(ck["doc_id"])).encode("utf-8")).hexdigest()
 
         # 批量入库(官方同款: 按 BATCH_SIZE 分批 insert)
         idxnm = search.index_name(task_tenant_id)
